@@ -42,12 +42,21 @@ image *images2;
 image *test_images;
 int H;
 int W;
+int M;
 char *dir1,*dir2,*dirC;
 
 
 /* Communication specific variables. */
 task_t tasks[SPU_THREADS] __attribute__((aligned(128)));
 int distribution_init_complete;
+
+/* Tasks variables. */
+int cur_task_num;
+data_t* cur_task_destination;
+
+
+/* Task Mean */
+uint32 *strip_sources;
 
 
 
@@ -87,7 +96,10 @@ image* read_images(char* dir, int nrImages)
 	images=calloc(nrImages,sizeof(image));
 
 	//Create the base image name
+	if(dir[strlen(dir)-1]=='/')	//if there's a / at the end, skip it
+		dir[strlen(dir)-1]=0;
 	strcpy(base_name,dir);
+
 	p=strrchr(dir,'/');
 	if(p==NULL)
 		p=dir;	//the beginning of the name
@@ -151,6 +163,13 @@ void init_spus()
 			DIE(rv!=0,"Error while creating thread");
 		}
 
+}
+
+/* Allocates an array of data_t */
+data_t* create_matrix(int dim_l, int dim_h) {
+    data_t* mat_aux = (data_t*) memalign(128,dim_l * dim_h * sizeof (data_t));
+    DIE(mat_aux==NULL,"Aloc'ing space");
+    return mat_aux;
 }
 
 /* Joins the SPU_THREADS and cleanes up everything else, SPU-related. */
@@ -271,6 +290,66 @@ void distribute_tasks(uint32 (*get_out_data)(uint32 received_data))
 	}
 }
 
+/********************************************************************************
+ * TASK PRODUCERS
+ ********************************************************************************/
+/* Produces the tasks for the task 1 (the mean of the pixels) */
+uint32 compute_mean_task_producer(uint32 cellID)
+{
+	//Build structure
+	int slice_size;
+	slice_size = M/SPU_THREADS;
+
+	if(cur_task_num<SPU_THREADS)
+	{
+		tasks[cellID].type=TASK_MEAN;
+		tasks[cellID].destination=(uint32)(&(cur_task_destination[cellID*slice_size]));
+		tasks[cellID].mainSource=(uint32)(strip_sources);
+	}
+	//If it's not the last task
+	if(cur_task_num<SPU_THREADS-1)
+	{
+		tasks[cellID].size=slice_size;
+		tasks[cellID].aux1=slice_size*cellID;
+		dlog(LOG_DEBUG,"\tSending slice %d of size: %d to %d, with strips array at %u",cur_task_num,tasks[cellID].size,cellID,tasks[cellID].mainSource);
+		cur_task_num++;
+		return (uint32)&tasks[cellID];
+	}
+	else
+		//If it's the last task
+		if(cur_task_num==SPU_THREADS-1)
+		{
+			tasks[cellID].size= M - cur_task_num*slice_size;
+			tasks[cellID].aux1=slice_size*cellID;
+			dlog(LOG_DEBUG,"\tSending slice %d of size: %d to %d, with strips array at %u",cur_task_num,tasks[cellID].size,cellID,tasks[cellID].mainSource);
+			cur_task_num++;
+			return (uint32)&tasks[cellID];
+		}
+	cur_task_num++;
+	//It's done so the distribution streak should finish
+	return DISTRIBUTE_TASK_EXIT;
+}
+
+
+/********************************************************************************
+ * TASK INITIALIZERS
+ ********************************************************************************/
+void compute_mean(image* images, int nr_images, data_t* mean)
+{
+	//Create the strips array
+	strip_sources=(uint32*)memalign(128,nr_images*sizeof(uint32));
+	int i;
+
+	for(i=0;i<nr_images;i++)
+		strip_sources[i]=(uint32)(images[i]->buf);
+
+	//Initializing task distribution
+	cur_task_destination=mean;
+	cur_task_num=0;
+
+	distribute_tasks(&compute_mean_task_producer);
+	dlog(LOG_WARNING,"Mean computation finished for %d images from %p.",nr_images,images);
+}
 
 
 int main(int argc, char **argv)
@@ -304,17 +383,34 @@ int main(int argc, char **argv)
 	images2=read_images(dir2,nrImagesTraining);
 	dlog(LOG_INFO,"Training images read. Reading test images from %s folder...",dirC);
 	test_images=read_images(dirC,nrImagesClasify);
-	dlog(LOG_WARNING,"All images have been read.");
 
     H=images1[0]->height;	//we consider all the images to have the same dimensions (equal to first image)
     W=images1[0]->width;
+    M=H*W;
+    dlog(LOG_WARNING,"All images have been read. W: %d; H: %d",W,H);
 
 	//Init SPU threads
 	init_spus();
 	dlog(LOG_INFO,"Initialized SPU threads.");
 
+	//Init memory
+    data_t *mean_type1, *mean_type2, *Sw, *Sw1, *Sw2, *Swinv;
+    data_t *matrix1, *matrix2, *matrix3;
+
+    //allocate all the matrices
+    matrix1 = create_matrix(M,1);
+    matrix2 = create_matrix(1,M);
+    matrix3 = create_matrix(M,M);
+    mean_type1 = create_matrix(M,1);
+    mean_type2 = create_matrix(M,1);
+    Sw1 = create_matrix(M, M);
+    Sw2 = create_matrix(M, M);
+
+
+
 	/*********************** TASK 1 **************************/
 	dlog(LOG_CRIT,"\n\n/****************** TASK 1 *******************\\\n");
+	compute_mean(images1, nrImagesTraining,mean_type1);
 
 	/*********************** TASK 2 **************************/
 	dlog(LOG_CRIT,"\n\n/****************** TASK 2 *******************\\\n");
