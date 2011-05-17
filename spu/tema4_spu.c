@@ -17,16 +17,18 @@ task_t task __attribute__((aligned(128)));
 
 void compute_mean_task()
 {
-	pixel_t buffer[MAX_CHUNK_SIZE] __attribute__((aligned(128)));	//alocare statica ca e mai rapida si permite checking la compilare
+	pixel_t buffer[2][MAX_CHUNK_SIZE] __attribute__((aligned(128)));	//alocare statica ca e mai rapida si permite checking la compilare
 	data_t mean[MAX_CHUNK_SIZE] __attribute__((aligned(128)));
 	uint32 *slice_sources;
-	uint32 tag;
+	uint32 tag[2];
 	int cur_image=0;
 	int i;
 	int nr_images;
 	int size;
 	int fetchable_size;
 	int start_pos;
+	int cur_buf=0;
+	int nxt_buf=1;
 
 	//Initialization
 	size=task.size;
@@ -44,25 +46,38 @@ void compute_mean_task()
 	memset(mean,0,MAX_CHUNK_SIZE*sizeof(data_t));
 
 	//Alocare tag
-	tag = mfc_tag_reserve();
-	DIE(tag==MFC_TAG_INVALID,"Cannot alocate tag");
+	tag[0] = mfc_tag_reserve();
+	DIE(tag[0]==MFC_TAG_INVALID,"Cannot alocate tag");
+
+	tag[1] = mfc_tag_reserve();
+	DIE(tag[1]==MFC_TAG_INVALID,"Cannot alocate tag");
 
 	//Get addresses of slices
-	mfc_get(slice_sources, task.mainSource, CEIL_16(nr_images * sizeof(uint32)), tag,	0, 0);
-	waitag(tag);
+	mfc_getb(slice_sources, task.mainSource, CEIL_16(nr_images * sizeof(uint32)), tag[0],	0, 0);
+	waitag(tag[0]);
 	dlog(LOG_CRAP,"\t\tSlice Addresses (%d bytes) in local store.",CEIL_16(nr_images * sizeof(uint32)));
+
+	//Request first block of data
+	mfc_getb(buffer[0], slice_sources[cur_image]+start_pos*sizeof(pixel_t), fetchable_size*sizeof(pixel_t), tag[0], 0, 0);
 
 	//Get the data and process it
 	while(cur_image<nr_images)
 	{
-		mfc_get(buffer, slice_sources[cur_image]+start_pos*sizeof(pixel_t), fetchable_size*sizeof(pixel_t), tag, 0, 0);
-		waitag(tag);
+		//Request next block of data, if any
+		if(cur_image+1<nr_images)
+		{
+			mfc_getb(buffer[nxt_buf], slice_sources[cur_image+1]+start_pos*sizeof(pixel_t), fetchable_size*sizeof(pixel_t), tag[nxt_buf], 0, 0);
+		}
+		//Wait for current block of data
+		waitag(tag[cur_buf]);
 
 		/*calculate the sum of the pixel values*/
 		for (i = 0; i < size; i++) {
-			mean[i]+=buffer[i];
+			mean[i]+=buffer[cur_buf][i];
 		}
 		cur_image++;
+		cur_buf=nxt_buf;
+		nxt_buf=(cur_buf+1)%2;
 	}
 	dlog(LOG_DEBUG,"\t\tFinished computing sum of pixels.");
 
@@ -74,13 +89,14 @@ void compute_mean_task()
 	dlog(LOG_DEBUG,"\tComputation complete for mean.");
 
 	//Put the data back into main memory
-	mfc_put(mean, task.destination, CEIL_16(size * sizeof(data_t)), tag, 0, 0);
-	waitag(tag);
+	mfc_put(mean, task.destination, CEIL_16(size * sizeof(data_t)), tag[0], 0, 0);
+	waitag(tag[0]);
 	dlog(LOG_DEBUG,"\tMEAN TASK data sending is complete. Data is in main memory!");
 
 	//Cleanup
 	free(slice_sources);
-	mfc_tag_release(tag);
+	mfc_tag_release(tag[0]);
+	mfc_tag_release(tag[1]);
 }
 
 
