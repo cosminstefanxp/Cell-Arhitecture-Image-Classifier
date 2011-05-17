@@ -71,10 +71,12 @@ void compute_mean_task()
 		//Wait for current block of data
 		waitag(tag[cur_buf]);
 
-		/*calculate the sum of the pixel values*/
+		//compute the sum of the pixel values
 		for (i = 0; i < size; i++) {
 			mean[i]+=buffer[cur_buf][i];
 		}
+
+		//actualize the management variables
 		cur_image++;
 		cur_buf=nxt_buf;
 		nxt_buf=(cur_buf+1)%2;

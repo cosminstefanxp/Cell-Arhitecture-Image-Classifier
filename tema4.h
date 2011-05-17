@@ -28,6 +28,7 @@ typedef float				data_t;
 
 
 #define TASK_MEAN 			1
+#define TASK_SWS			2
 
 
 #define TASK_DATA_EXIT			0

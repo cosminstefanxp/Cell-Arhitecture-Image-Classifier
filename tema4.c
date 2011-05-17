@@ -55,9 +55,17 @@ int cur_task_pos;
 data_t* cur_task_destination;
 int cur_strip_size;
 int cur_image_num;
+image *cur_images;
+int cur_task_size;
 
-/* Task Mean */
+/* Task 1 */
 uint32 *strip_sources;
+
+/* Task 2 */
+data_t **cur_SWs;
+data_t *cur_mean;
+
+
 
 
 
@@ -302,7 +310,6 @@ void distribute_tasks(uint32 (*get_out_data)(uint32 received_data))
  */
 uint32 compute_mean_task_producer(uint32 cellID)
 {
-
 	//It's done so the distribution streak should finish
 	if(cur_task_pos>=M)
 		return DISTRIBUTE_TASK_EXIT;
@@ -335,10 +342,25 @@ uint32 compute_mean_task_producer(uint32 cellID)
 	return (uint32) &tasks[cellID];
 }
 
+uint32 compute_SWs_task_producer(uint32 cellID)
+{
+	//It's done so the distribution streak should finish
+	if(cur_task_pos>=cur_task_size)
+		return DISTRIBUTE_TASK_EXIT;
+	//Build structure
+	tasks[cellID].type=TASK_SWS;
+	tasks[cellID].destination=(uint32)(&(cur_SWs[cur_task_pos]));
+	tasks[cellID].mainSource=(uint32)(cur_images[cur_task_pos]->buf);
+	tasks[cellID].size=M;
+	tasks[cellID].source1=(uint32)(cur_mean);	//where to get the mean array
+
+	return (uint32) &tasks[cellID];
+}
 
 /********************************************************************************
  * TASK INITIALIZERS
  ********************************************************************************/
+/* Task 1 initializer. */
 void compute_mean(image* images, int nr_images, data_t* mean)
 {
 	int i;
@@ -369,6 +391,24 @@ void compute_mean(image* images, int nr_images, data_t* mean)
 	printf("\n\n----%d---\n",M);
 }
 
+void compute_scatter_matrix(image* images, int nr_images, data_t* mean, data* SW)
+{
+	data_t **SWs;
+	//Alloc' the necessary space
+	SWs=(data_t**)malloc(nrImagesTraining*sizeof(data_t*));
+	for(i=0;i<nrImagesTraining;i++)
+		SWs[i]=create_matrix(M,M);
+
+	//Prepare the tasks
+	cur_SWs=SWs;			//where to put the results
+	cur_task_pos=0;			//the next task to send
+	cur_images=images;		//the array of images
+	cur_task_size=nr_images;//the number of images (tasks)
+	cur_mean=mean;			//the mean computed previously
+
+	//Distribute the tasks to compute the SWs
+	distribute_tasks(compute_SWs_task_producer);
+}
 
 int main(int argc, char **argv)
 {
@@ -411,27 +451,28 @@ int main(int argc, char **argv)
 	init_spus();
 	dlog(LOG_INFO,"Initialized SPU threads.");
 
-	//Init memory
-    data_t *mean_type1, *mean_type2, *Sw, *Sw1, *Sw2, *Swinv;
-    data_t *matrix1, *matrix2, *matrix3;
 
-    //allocate all the matrices
-    matrix1 = create_matrix(M,1);
-    matrix2 = create_matrix(1,M);
-    matrix3 = create_matrix(M,M);
-    mean_type1 = create_matrix(M,1);
-    mean_type2 = create_matrix(M,1);
-    Sw1 = create_matrix(M, M);
-    Sw2 = create_matrix(M, M);
+	//Task processing preparation...
+    data_t *mean_type1, *mean_type2;
+    data_t *SW1,SW2;
 
 
 
 	/*********************** TASK 1 **************************/
 	dlog(LOG_CRIT,"\n\n/****************** TASK 1 *******************\\\n");
+    //Alloc' the necessary space
+    mean_type1 = create_matrix(M,1);
+    mean_type2 = create_matrix(M,1);
+    //Compute the means
 	compute_mean(images1, nrImagesTraining,mean_type1);
 
 	/*********************** TASK 2 **************************/
 	dlog(LOG_CRIT,"\n\n/****************** TASK 2 *******************\\\n");
+    //Alloc' the necessary space
+    SW1 = create_matrix(M,M);
+    SW2 = create_matrix(M,M);
+    //Compute the means
+	compute_scatter_matrix(images1,nrImagesTraining,mean_type1,SW1);
 
 	/*********************** TASK 3 **************************/
 	dlog(LOG_CRIT,"\n\n/****************** TASK 3 *******************\\\n");
