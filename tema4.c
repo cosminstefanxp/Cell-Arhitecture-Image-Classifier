@@ -310,7 +310,8 @@ uint32 compute_mean_task_producer(uint32 cellID)
 	tasks[cellID].type=TASK_MEAN;
 	tasks[cellID].destination=(uint32)(&(cur_task_destination[cur_task_pos]));
 	tasks[cellID].mainSource=(uint32)(strip_sources);
-	tasks[cellID].aux2=cur_image_num;	//number of images to process
+	tasks[cellID].source1=cur_image_num;	//number of images to process
+	tasks[cellID].aux2=cur_task_pos;		//the starting position in the images
 
 	//If it's not the task for the last SPU
 	if(cur_task_pos+2*cur_strip_size<M)
@@ -358,6 +359,14 @@ void compute_mean(image* images, int nr_images, data_t* mean)
 	dlog(LOG_WARNING,"Mean computation finished for %d images from %p.",nr_images,images);
 
 	free(strip_sources);
+	sleep(1);
+	for(i=0;i<M;i++)
+	{
+		if(i%W==0)
+			printf("\n\n");
+		printf("%3.2f ",mean[i]);
+	}
+	printf("\n\n----%d---\n",M);
 }
 
 

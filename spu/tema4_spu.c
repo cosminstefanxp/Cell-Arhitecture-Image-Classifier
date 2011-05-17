@@ -26,12 +26,15 @@ void compute_mean_task()
 	int nr_images;
 	int size;
 	int fetchable_size;
+	int start_pos;
 
 	//Initialization
 	size=task.size;
 	fetchable_size=task.aux1;
-	nr_images=task.aux2;
-	dlog(LOG_INFO,"Received a new MEAN TASK with data of size %d (fetchable %d) and %d images.",size,fetchable_size,nr_images);
+	start_pos=task.aux2;
+	nr_images=task.source1;
+
+	dlog(LOG_INFO,"Received a new MEAN TASK with data of size %d (fetchable %d) and %d images, starting at %d.",size,fetchable_size,nr_images,start_pos);
 	assert(size<16384);
 	assert(fetchable_size % 16==0);
 
@@ -52,7 +55,7 @@ void compute_mean_task()
 	//Get the data and process it
 	while(cur_image<nr_images)
 	{
-		mfc_get(buffer, slice_sources[cur_image], fetchable_size*sizeof(pixel_t), tag, 0, 0);
+		mfc_get(buffer, slice_sources[cur_image]+start_pos*sizeof(pixel_t), fetchable_size*sizeof(pixel_t), tag, 0, 0);
 		waitag(tag);
 
 		/*calculate the sum of the pixel values*/
