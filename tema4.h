@@ -48,5 +48,7 @@ typedef struct {
 
 
 #define MIN(a,b) ((a) < (b) ? (a) : (b))
+#define CEIL_16(value)   ((value +  0x0F) &  0xFFFFFFF0)
+#define FLOOR_16(value)   ((value) &  0xFFFFFFF0)
 
 #endif /* CALSIFICATOR_H_ */

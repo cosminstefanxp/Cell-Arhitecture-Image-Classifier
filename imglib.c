@@ -5,7 +5,7 @@ alloc_img (unsigned int width, unsigned int height)
 {
   image img;
   img = malloc (sizeof (image_t));
-  img->buf = (pixel_t*)memalign (128, width * height * sizeof (pixel_t));
+  img->buf = (pixel_t*)memalign (128, CEIL_16(width * height * sizeof (pixel_t)));
   img->width = width;
   img->height = height;
   return img;

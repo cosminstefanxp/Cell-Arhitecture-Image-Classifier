@@ -51,9 +51,10 @@ task_t tasks[SPU_THREADS] __attribute__((aligned(128)));
 int distribution_init_complete;
 
 /* Tasks variables. */
-int cur_task_num;
+int cur_task_pos;
 data_t* cur_task_destination;
-
+int cur_strip_size;
+int cur_image_num;
 
 /* Task Mean */
 uint32 *strip_sources;
@@ -122,7 +123,8 @@ image* read_images(char* dir, int nrImages)
 		rv=fclose(fin);
 		DIE(rv!=0,"Eroare inchidere fisier intrare");
 
-		dlog(LOG_DEBUG,"\t\tRead image \'%s\' of size %4dx%4d",images[i]->name,images[i]->width,images[i]->height);
+		dlog(LOG_DEBUG,"\t\tRead image \'%s\' of size %3dx%3d (alloc'ed size: %d)",\
+				images[i]->name,images[i]->width,images[i]->height,CEIL_16(images[i]->width*images[i]->height));
 	}
 
 	return images;
@@ -167,7 +169,7 @@ void init_spus()
 
 /* Allocates an array of data_t */
 data_t* create_matrix(int dim_l, int dim_h) {
-    data_t* mat_aux = (data_t*) memalign(128,dim_l * dim_h * sizeof (data_t));
+    data_t* mat_aux = (data_t*) memalign(128,CEIL_16(dim_l * dim_h * sizeof (data_t)));
     DIE(mat_aux==NULL,"Aloc'ing space");
     return mat_aux;
 }
@@ -293,41 +295,43 @@ void distribute_tasks(uint32 (*get_out_data)(uint32 received_data))
 /********************************************************************************
  * TASK PRODUCERS
  ********************************************************************************/
-/* Produces the tasks for the task 1 (the mean of the pixels) */
+/* Produces the tasks for the task 1 (the mean of the pixels).
+ *
+ * For all the initial tasks we send cur_strip_size elements for processing.
+ * For the previous to last task (in order to skip an extra remainind task with few elements) we send all the elements till the end.
+ */
 uint32 compute_mean_task_producer(uint32 cellID)
 {
-	//Build structure
-	int slice_size;
-	slice_size = M/SPU_THREADS;
 
-	if(cur_task_num<SPU_THREADS)
+	//It's done so the distribution streak should finish
+	if(cur_task_pos>=M)
+		return DISTRIBUTE_TASK_EXIT;
+	//Build structure
+	tasks[cellID].type=TASK_MEAN;
+	tasks[cellID].destination=(uint32)(&(cur_task_destination[cur_task_pos]));
+	tasks[cellID].mainSource=(uint32)(strip_sources);
+	tasks[cellID].aux2=cur_image_num;	//number of images to process
+
+	//If it's not the task for the last SPU
+	if(cur_task_pos+2*cur_strip_size<M)
 	{
-		tasks[cellID].type=TASK_MEAN;
-		tasks[cellID].destination=(uint32)(&(cur_task_destination[cellID*slice_size]));
-		tasks[cellID].mainSource=(uint32)(strip_sources);
-	}
-	//If it's not the last task
-	if(cur_task_num<SPU_THREADS-1)
-	{
-		tasks[cellID].size=slice_size;
-		tasks[cellID].aux1=slice_size*cellID;
-		dlog(LOG_DEBUG,"\tSending slice %d of size: %d to %d, with strips array at %u",cur_task_num,tasks[cellID].size,cellID,tasks[cellID].mainSource);
-		cur_task_num++;
-		return (uint32)&tasks[cellID];
+		tasks[cellID].size=cur_strip_size;	//effective size of data to process
+		tasks[cellID].aux1=cur_strip_size;	//size to fetch
+		dlog(LOG_DEBUG,"\tSending mean slice of size %d (fetching %d) beggining at %d to cell %d, with strips array at %u",\
+				tasks[cellID].size,tasks[cellID].aux1,cur_task_pos,cellID,tasks[cellID].mainSource);
+		cur_task_pos+=cur_strip_size;
 	}
 	else
-		//If it's the last task
-		if(cur_task_num==SPU_THREADS-1)
+		//If it's the last task for the last SPU - we send all the remaining (even if it excedes cur_task_size)
 		{
-			tasks[cellID].size= M - cur_task_num*slice_size;
-			tasks[cellID].aux1=slice_size*cellID;
-			dlog(LOG_DEBUG,"\tSending slice %d of size: %d to %d, with strips array at %u",cur_task_num,tasks[cellID].size,cellID,tasks[cellID].mainSource);
-			cur_task_num++;
-			return (uint32)&tasks[cellID];
-		}
-	cur_task_num++;
-	//It's done so the distribution streak should finish
-	return DISTRIBUTE_TASK_EXIT;
+		tasks[cellID].size = M - cur_task_pos;
+		tasks[cellID].aux1 = CEIL_16(tasks[cellID].size);
+		dlog(LOG_DEBUG,"\tSending last mean slice of size %d (fetching %d) beggining at %d to cell %d, with strips array at %u",\
+				tasks[cellID].size,tasks[cellID].aux1,cur_task_pos,cellID,tasks[cellID].mainSource);
+		cur_task_pos+=tasks[cellID].size;
+	}
+
+	return (uint32) &tasks[cellID];
 }
 
 
@@ -336,19 +340,24 @@ uint32 compute_mean_task_producer(uint32 cellID)
  ********************************************************************************/
 void compute_mean(image* images, int nr_images, data_t* mean)
 {
-	//Create the strips array
-	strip_sources=(uint32*)memalign(128,nr_images*sizeof(uint32));
 	int i;
 
+	//Create the strips array
+	strip_sources=(uint32*)memalign(128,CEIL_16(nr_images*sizeof(uint32)));
 	for(i=0;i<nr_images;i++)
 		strip_sources[i]=(uint32)(images[i]->buf);
+	cur_strip_size=FLOOR_16(M/SPU_THREADS);
+	dlog(LOG_WARNING,"Starting computation of mean with strips of size %d",cur_strip_size);
 
 	//Initializing task distribution
 	cur_task_destination=mean;
-	cur_task_num=0;
+	cur_task_pos=0;
+	cur_image_num=nr_images;
 
 	distribute_tasks(&compute_mean_task_producer);
 	dlog(LOG_WARNING,"Mean computation finished for %d images from %p.",nr_images,images);
+
+	free(strip_sources);
 }
 
 

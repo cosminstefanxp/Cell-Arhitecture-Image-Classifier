@@ -8,6 +8,7 @@
 #include <math.h>
 #include <malloc.h>
 #include <sys/queue.h>
+#include "tema4.h"
 
 typedef unsigned char pixel_t;
 #define MAX_IMAGE_NAME 100

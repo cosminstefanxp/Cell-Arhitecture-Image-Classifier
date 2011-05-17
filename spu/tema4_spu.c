@@ -9,10 +9,76 @@
 // 1. scrie masca de tag
 // 2. citeste statusul - blocant pana la finalizareac comenzilor
 #define waitag(t) mfc_write_tag_mask(1<<t); mfc_read_tag_status_all();
-#define COUNT_CHUNK_SIZE 16000
+#define MAX_CHUNK_SIZE 16384
+
 
 char unitName[20];
 task_t task __attribute__((aligned(128)));
+
+void compute_mean_task()
+{
+	pixel_t buffer[MAX_CHUNK_SIZE] __attribute__((aligned(128)));	//alocare statica ca e mai rapida si permite checking la compilare
+	data_t mean[MAX_CHUNK_SIZE] __attribute__((aligned(128)));
+	uint32 *slice_sources;
+	uint32 tag;
+	int cur_image=0;
+	int i;
+	int nr_images;
+	int size;
+	int fetchable_size;
+
+	//Initialization
+	size=task.size;
+	fetchable_size=task.aux1;
+	nr_images=task.aux2;
+	dlog(LOG_INFO,"Received a new MEAN TASK with data of size %d (fetchable %d) and %d images.",size,fetchable_size,nr_images);
+	assert(size<16384);
+	assert(fetchable_size % 16==0);
+
+	slice_sources = (uint32*) memalign(128, CEIL_16(nr_images * sizeof(uint32)));
+	DIE(slice_sources==NULL,"Cannot alocate memory");
+
+	memset(mean,0,MAX_CHUNK_SIZE*sizeof(data_t));
+
+	//Alocare tag
+	tag = mfc_tag_reserve();
+	DIE(tag==MFC_TAG_INVALID,"Cannot alocate tag");
+
+	//Get addresses of slices
+	mfc_get(slice_sources, task.mainSource, CEIL_16(nr_images * sizeof(uint32)), tag,	0, 0);
+	waitag(tag);
+	dlog(LOG_CRAP,"\t\tSlice Addresses (%d bytes) in local store.",CEIL_16(nr_images * sizeof(uint32)));
+
+	//Get the data and process it
+	while(cur_image<nr_images)
+	{
+		mfc_get(buffer, slice_sources[cur_image], fetchable_size*sizeof(pixel_t), tag, 0, 0);
+		waitag(tag);
+
+		/*calculate the sum of the pixel values*/
+		for (i = 0; i < size; i++) {
+			mean[i]+=buffer[i];
+		}
+		cur_image++;
+	}
+	dlog(LOG_DEBUG,"\t\tFinished computing sum of pixels.");
+
+	//Compute the mean
+	for (i = 0; i < size; i++)
+	{
+		mean[i]/=nr_images;
+	}
+	dlog(LOG_DEBUG,"\tComputation complete for mean.");
+
+	//Put the data back into main memory
+	mfc_put(mean, task.destination, CEIL_16(size * sizeof(data_t)), tag, 0, 0);
+	waitag(tag);
+	dlog(LOG_DEBUG,"\tMEAN TASK data sending is complete. Data is in main memory!");
+
+	//Cleanup
+	free(slice_sources);
+	mfc_tag_release(tag);
+}
 
 
 int main(unsigned long long speid, unsigned long long cellID, unsigned long long noThreads)
@@ -44,7 +110,8 @@ int main(unsigned long long speid, unsigned long long cellID, unsigned long long
 
 		switch(task.type)
 		{
-		default: dlog(LOG_WARNING,"Unknown type of task!!!! Skipping..."); break;
+		case TASK_MEAN: compute_mean_task(); break;
+		default: dlog(LOG_ALERT,"Unknown type of task!!!! Skipping..."); break;
 		}
 
 		//Write confirmation of finished job
