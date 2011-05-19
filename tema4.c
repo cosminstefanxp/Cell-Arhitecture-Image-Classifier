@@ -57,6 +57,7 @@ int cur_strip_size;
 int cur_image_num;
 image *cur_images;
 int cur_task_size;
+int cur_matrixes_num;
 
 /* Task 1 */
 uint32 *strip_sources;
@@ -257,7 +258,7 @@ void distribute_tasks(uint32 (*get_out_data)(uint32 received_data))
 			eprintf("Error at SPE event wait. Received: %d\n",nevents);
 			continue;
 		}
-		dlog(LOG_DEBUG,"\tReceived %d events...",nevents);
+		dlog(LOG_CRAP,"\tReceived %d events...",nevents);
 
 		//If it's an event on the out-interrupt mailbox
 		if (event_received.events & SPE_EVENT_OUT_INTR_MBOX)
@@ -286,7 +287,7 @@ void distribute_tasks(uint32 (*get_out_data)(uint32 received_data))
 			//Send data
 			rv=spe_in_mbox_write(event_received.spe, &out_data, 1, SPE_MBOX_ANY_NONBLOCKING);
 			DIE(rv<0,"Error while writing data to SPE mbox");
-			dlog(LOG_DEBUG,"\t\tSent data %d to %p.",out_data,event_received.spe);
+			dlog(LOG_CRAP,"\t\tSent data %d to %p.",out_data,event_received.spe);
 		}
 		/* The spe_stop_info_read loop should check for SPE_EVENT_SPE_STOPPED event received in the events mask */
 		else if (event_received.events & SPE_EVENT_SPE_STOPPED)
@@ -325,7 +326,7 @@ uint32 compute_mean_task_producer(uint32 cellID)
 	{
 		tasks[cellID].size=cur_strip_size;	//effective size of data to process
 		tasks[cellID].aux1=cur_strip_size;	//size to fetch
-		dlog(LOG_DEBUG,"\tSending mean slice of size %d (fetching %d) beggining at %d to cell %d, with strips array at %u",\
+		dlog(LOG_DEBUG,"\tSending mean slice of size %d (fetching %d) beginning at %d to cell %d, with strips array at %u",\
 				tasks[cellID].size,tasks[cellID].aux1,cur_task_pos,cellID,tasks[cellID].mainSource);
 		cur_task_pos+=cur_strip_size;
 	}
@@ -342,6 +343,10 @@ uint32 compute_mean_task_producer(uint32 cellID)
 	return (uint32) &tasks[cellID];
 }
 
+/* Produces the tasks for the first part of task 1 (the SWs).
+ *
+ * Sends an image to a SPU and the mean array, and gets the (x-u)(x-u)T result.
+ */
 uint32 compute_SWs_task_producer(uint32 cellID)
 {
 	//It's done so the distribution streak should finish
@@ -349,10 +354,38 @@ uint32 compute_SWs_task_producer(uint32 cellID)
 		return DISTRIBUTE_TASK_EXIT;
 	//Build structure
 	tasks[cellID].type=TASK_SWS;
-	tasks[cellID].destination=(uint32)(&(cur_SWs[cur_task_pos]));
+	tasks[cellID].destination=(uint32)(cur_SWs[cur_task_pos]);
 	tasks[cellID].mainSource=(uint32)(cur_images[cur_task_pos]->buf);
 	tasks[cellID].size=M;
 	tasks[cellID].source1=(uint32)(cur_mean);	//where to get the mean array
+
+	dlog(LOG_DEBUG,"Sending COMPUTE_SW task for image %d to %d with mean %u",cur_task_pos,cellID,tasks[cellID].source1);
+	cur_task_pos++;
+
+	return (uint32) &tasks[cellID];
+}
+
+/* Produces the task for the addition of a given number of matrixes (cur_image_num).
+ *
+ * Takes one strip from each of the matrixes, computes the sum, and puts the result back in the main memory.
+ */
+uint32 compute_add_task_producer(uint32 cellID)
+{
+	//It's done so the distribution streak should finish
+	if(cur_task_pos>=cur_task_size)
+		return DISTRIBUTE_TASK_EXIT;
+
+	//Build structure
+	tasks[cellID].type=TASK_ADD;
+	tasks[cellID].destination=(uint32)(cur_task_destination);
+	tasks[cellID].mainSource=(uint32)(strip_sources);
+	tasks[cellID].source1=cur_matrixes_num;	//number of matrixes to process
+	tasks[cellID].aux1=cur_task_pos;		//the starting position in the images
+	tasks[cellID].size=cur_strip_size;		//the size of the strip (i.e. a line of the matrix <=> M)
+
+	dlog(LOG_DEBUG,"\tSending add slice of size %d beginning at %d to cell %d, with strips array at %u",\
+				tasks[cellID].size,tasks[cellID].aux1,cellID,tasks[cellID].mainSource);
+	cur_task_pos+=cur_strip_size;
 
 	return (uint32) &tasks[cellID];
 }
@@ -391,13 +424,18 @@ void compute_mean(image* images, int nr_images, data_t* mean)
 	printf("\n\n----%d---\n",M);
 }
 
-void compute_scatter_matrix(image* images, int nr_images, data_t* mean, data* SW)
+/* Task 2 initializer. */
+void compute_scatter_matrix(image* images, int nr_images, data_t* mean, data_t* SW)
 {
 	data_t **SWs;
+	int i;
 	//Alloc' the necessary space
 	SWs=(data_t**)malloc(nrImagesTraining*sizeof(data_t*));
+	DIE(SWs==NULL,"Cannot allocate memory.");
 	for(i=0;i<nrImagesTraining;i++)
+	{
 		SWs[i]=create_matrix(M,M);
+	}
 
 	//Prepare the tasks
 	cur_SWs=SWs;			//where to put the results
@@ -406,8 +444,41 @@ void compute_scatter_matrix(image* images, int nr_images, data_t* mean, data* SW
 	cur_task_size=nr_images;//the number of images (tasks)
 	cur_mean=mean;			//the mean computed previously
 
+	dlog(LOG_INFO,"Completed computation of SWs matrixes for images %p.",images);
+
 	//Distribute the tasks to compute the SWs
 	distribute_tasks(compute_SWs_task_producer);
+
+	//Prepare the tasks for addition of matrixes
+	cur_task_destination=SW;
+	cur_matrixes_num=nr_images;
+	cur_task_pos=0;
+	cur_task_size=M*M;
+	cur_strip_size=M;
+	assert(M*sizeof(data_t)%16==0);	//as promised, the product W*H will be divide by 4
+	//Create the strips array
+	strip_sources=(uint32*)memalign(128,CEIL_16(nr_images*sizeof(uint32)));
+	for(i=0;i<nr_images;i++)
+		strip_sources[i]=(uint32)(SWs[i]);
+
+	//Distribute the tasks to compute the additions
+	distribute_tasks(&compute_add_task_producer);
+
+	dlog(LOG_INFO,"Completed addition of SWs matrixes for images %p.",images);
+
+//	printf("\n\n");
+//	for(i=0;i<M;i++)
+//		printf("%3.2f ",SW[i]);
+//	printf("\n\n");
+//	for(i=0;i<M;i++)
+//			printf("%3.2f ",SW[M*(M-1)+i]);
+
+	//Cleanup
+	free(strip_sources);
+	for(i=0;i<nr_images;i++)
+		free(SWs[i]);
+	free(SWs);
+
 }
 
 int main(int argc, char **argv)
@@ -454,7 +525,7 @@ int main(int argc, char **argv)
 
 	//Task processing preparation...
     data_t *mean_type1, *mean_type2;
-    data_t *SW1,SW2;
+    data_t *SW1,*SW2;
 
 
 
@@ -465,6 +536,7 @@ int main(int argc, char **argv)
     mean_type2 = create_matrix(M,1);
     //Compute the means
 	compute_mean(images1, nrImagesTraining,mean_type1);
+	compute_mean(images2, nrImagesTraining,mean_type2);
 
 	/*********************** TASK 2 **************************/
 	dlog(LOG_CRIT,"\n\n/****************** TASK 2 *******************\\\n");
@@ -473,6 +545,7 @@ int main(int argc, char **argv)
     SW2 = create_matrix(M,M);
     //Compute the means
 	compute_scatter_matrix(images1,nrImagesTraining,mean_type1,SW1);
+	compute_scatter_matrix(images1,nrImagesTraining,mean_type1,SW2);
 
 	/*********************** TASK 3 **************************/
 	dlog(LOG_CRIT,"\n\n/****************** TASK 3 *******************\\\n");
