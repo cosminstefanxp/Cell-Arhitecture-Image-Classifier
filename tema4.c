@@ -10,6 +10,8 @@
 #include <libspe2.h>
 #include <pthread.h>
 #include <time.h>
+#include "lapack.h"
+
 
 #include "util.h"
 #include "imglib.h"
@@ -66,7 +68,9 @@ uint32 *strip_sources;
 data_t **cur_SWs;
 data_t *cur_mean;
 
-
+/* Task 5*/
+data_t *cur_matrix;
+data_t *cur_vector;
 
 
 
@@ -390,6 +394,40 @@ uint32 compute_add_task_producer(uint32 cellID)
 	return (uint32) &tasks[cellID];
 }
 
+/* Produces the task for the multiplication of a matrix with a vector.
+ *
+ * Takes one strip from the image, computes the product, and puts the _single_ result value back in memory
+ */
+uint32 compute_mul_mat_vect_task_producer(uint32 cellID)
+{
+//	//If the initial distribution is finished, get the result from the task structure
+//	if(distribution_init_complete)
+//	{
+//		int pos=tasks[cellID].aux1;
+//		dlog(LOG_INFO,"Putting result from SPU %d on %d in W matrix.",cellID,pos);
+//		//I use memcpy to transfer the float in the 4 bytes of the uint32. If it's double it's also valid, as it would use the source2 field too.
+//		memcpy(&(cur_task_destination[pos]),&(tasks[cellID].source1),sizeof(data_t));
+//	}
+
+	//It's done so the distribution streak should finish
+	if(cur_task_pos>=cur_task_size)
+		return DISTRIBUTE_TASK_EXIT;
+
+	//Build structure
+	tasks[cellID].type=TASK_MUL;
+	tasks[cellID].destination=(uint32)(&(cur_task_destination[cur_task_pos]));
+	tasks[cellID].mainSource=(uint32)(&cur_matrix[cur_task_pos*M]);	//we give the line cur_task_pos of the matrix
+	tasks[cellID].source1=(uint32)cur_vector;		//the vector
+	tasks[cellID].aux1=(uint32)cur_task_pos;		//the current position in the matrix; used when returning the value back to PPU
+	tasks[cellID].size=(uint32)cur_strip_size;		//the size of the strip (i.e. a line of the matrix <=> M)
+
+	dlog(LOG_DEBUG,"\tSending add MULTIPLICATION slice of size %d beginning at %d to cell %d",\
+				tasks[cellID].size,tasks[cellID].aux1,cellID);
+	cur_task_pos+=1;
+
+	return (uint32) &tasks[cellID];
+}
+
 /********************************************************************************
  * TASK INITIALIZERS
  ********************************************************************************/
@@ -471,7 +509,7 @@ void compute_scatter_matrix(image* images, int nr_images, data_t* mean, data_t* 
 //		printf("%3.2f ",SW[i]);
 //	printf("\n\n");
 //	for(i=0;i<M;i++)
-//			printf("%3.2f ",SW[M*(M-1)+i]);
+//			printf("%3.2f ",SW[M*(M-100)+i]);
 
 	//Cleanup
 	free(strip_sources);
@@ -479,6 +517,113 @@ void compute_scatter_matrix(image* images, int nr_images, data_t* mean, data_t* 
 		free(SWs[i]);
 	free(SWs);
 
+}
+
+/* Task 3 initializer. */
+void compute_SW(data_t* SW1, data_t* SW2, data_t* SW)
+{
+	//Prepare the tasks for addition of matrixes
+	cur_task_destination=SW;
+	cur_matrixes_num=2;
+	cur_task_pos=0;
+	cur_task_size=M*M;
+	cur_strip_size=M;
+	assert(M*sizeof(data_t)%16==0);	//as promised, the product W*H will be divide by 4
+	//Create the strips array
+	strip_sources=(uint32*)memalign(128,CEIL_16(2*sizeof(uint32)));
+	strip_sources[0]=(uint32)(SW1);
+	strip_sources[1]=(uint32)(SW2);
+
+	dlog(LOG_INFO,"Starting computation of SW matrix as Sw1*Sw2.");
+	//Distribute the tasks to compute the additions
+	distribute_tasks(&compute_add_task_producer);
+
+	dlog(LOG_INFO,"Completed computation of SW matrix.");
+
+	//Cleanup
+	free(strip_sources);
+}
+
+/* Task 1 executer. */
+void inverse_matrix(data_t* SW)
+{
+    int info = 0;
+    double *a;
+    int *ipiv;
+    int i;
+    double rand;
+    int n=M;
+
+    dlog(LOG_WARNING,"Starting matrix inversion algorithm.");
+    posix_memalign((void **)((void*)(&ipiv)), 128, sizeof(int)*M);
+    DIE(ipiv==NULL,"Allocation error");
+    posix_memalign((void **)((void*)(&a)), 128, sizeof(double)*M*M);
+    DIE(a==NULL,"Allocation error");
+
+    srand48(time(NULL));
+    for( i = 0; i < M*M; i++ )
+    {
+        	a[i] = SW [i];
+            if (a[i] == 0)
+                a[i] += ((drand48() - 0.5f) / 1e2);
+    }
+
+    /*prevent matrix from being singular*/
+    rand = ((drand48() - 0.5f));
+    for (i=0; i<M; i++)
+    	a[i + i * M] += rand * a[i + i * M];
+    dlog(LOG_INFO,"Preprocessing done.");
+
+    /*---------Call Cell LAPACK library---------*/
+    dgetrf_(&n, &n, a, &n, ipiv, &info);
+    DIE(info!=0,"dgetrf error");
+    dlog(LOG_INFO,"Round 1 done.");
+
+    /*---------Query workspace-------*/
+    double workspace;
+    int tmp=-1;
+    int lwork;
+    double *work;
+    dgetri_(&n, a, &n, ipiv, &workspace, &tmp, &info);
+    lwork = (int)workspace;
+    work = malloc(sizeof(double)*lwork);
+    DIE(work==NULL,"Allocation error");
+    dlog(LOG_INFO,"Round 2 done.");
+
+    /*---------Call Cell LAPACK library---------*/
+    dgetri_(&n, a, &n, ipiv, work, &lwork, &info);
+    DIE(info!=0,"dgetri error");
+    dlog(LOG_INFO,"Round 3 done.");
+
+    for(i=0;i<M*M;i++)
+    	SW[i]=(float)a[i];
+
+    free(ipiv);
+    free(a);
+    free(work);
+
+    dlog(LOG_INFO,"Finished matrix inversion algorithm.");
+}
+
+/* Task 5 initializer. */
+void compute_W(data_t *mean_diff, data_t* SW, data_t* WM)
+{
+	//Prepare the tasks for addition of matrixes
+	cur_task_destination=WM;
+	cur_task_pos=0;			//the current line processing
+	cur_matrix=SW;			//the matrix
+	cur_strip_size=M;		//M elements per line
+	cur_task_size=M;		//M lines
+	cur_vector=mean_diff;
+
+	//Start the distribution
+	distribute_tasks(&compute_mul_mat_vect_task_producer);
+
+	int i;
+	printf("\n\n");
+	for(i=0;i<M;i++)
+		printf("%3.2f ",WM[i]);
+	printf("\n\n");
 }
 
 int main(int argc, char **argv)
@@ -524,8 +669,8 @@ int main(int argc, char **argv)
 
 
 	//Task processing preparation...
-    data_t *mean_type1, *mean_type2;
-    data_t *SW1,*SW2;
+    data_t *mean_type1, *mean_type2,*mean_diff;
+    data_t *SW1,*SW2,*SW;
 
 
 
@@ -549,7 +694,26 @@ int main(int argc, char **argv)
 
 	/*********************** TASK 3 **************************/
 	dlog(LOG_CRIT,"\n\n/****************** TASK 3 *******************\\\n");
+	SW = create_matrix(M,M);
+	compute_SW(SW1,SW2,SW);
+	free(SW1);
+	free(SW2);
 
+	/*********************** TASK 4 **************************/
+	dlog(LOG_CRIT,"\n\n/****************** TASK 4 *******************\\\n");
+	inverse_matrix(SW);
+
+	/*********************** TASK 5 **************************/
+	dlog(LOG_CRIT,"\n\n/****************** TASK 5 *******************\\\n");
+	//Computing the u1-u2 on PPU as the overhead would be bigger if sent on SPU (not too many elements)
+	mean_diff=create_matrix(M,1);
+	for(i=0;i<M;i++)
+		mean_diff[i]=mean_type1[i]-mean_type2[i];
+	free(mean_type1);
+	free(mean_type2);
+	data_t *WM=create_matrix(M,1);	//W Matrix
+	//Compute the W array
+	compute_W(mean_diff, SW, WM);
 
 	/********************** CLEANUP **************************/
 	dlog(LOG_CRIT,"\n\n/***************** CLEANUP ******************\\\n");

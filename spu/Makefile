@@ -25,8 +25,7 @@ LIBRARY_embed          := lib_tema4_spu.a
 
 CFLAGS		:= -DDEBUG_ -DLOG_LEVEL=LOG_INFO
  
-IMPORTS		:= -lm
- 
+IMPORTS		:= -lm 
 
 ################
 

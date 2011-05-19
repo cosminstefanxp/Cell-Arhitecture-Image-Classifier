@@ -1,1 +1,1 @@
-int inv_main( double* mat, int n );
+int inv_main( float* mat, int n );

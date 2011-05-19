@@ -1,15 +1,29 @@
+#include <stdio.h>
 #include <spu_mfcio.h>
+#include <spu_intrinsics.h>
 #include "../tema4.h"
 #include "../util.h"
 #include "../imglib.h"
 //de pe cell:  ssh cosmin.stefan-dobrin@172.16.6.3
 
 
+#define CACHE_NAME MY_CACHE /* numele cache-ului */
+#define CACHED_TYPE float /* tipul elementului de baza al cache-ului */
+
+/* atribute optionale */
+#define CACHE_TYPE CACHE_TYPE_RW 	/* acces de scriere si citire */
+#define CACHELINE_LOG2SIZE 10 		/* 2^10 = lungimea unei linii de cache de 1024 bytes */
+#define CACHE_LOG2NWAY 2 /* 2^2 = 4-way cache */
+#define CACHE_LOG2NSETS 3 /* 2^3 = 8 seturi */
+
+#include <cache-api.h>
+
+
 // Macro ce asteapta finalizarea grupului de comenzi DMA cu acelasi tag
 // 1. scrie masca de tag
 // 2. citeste statusul - blocant pana la finalizareac comenzilor
 #define waitag(t) mfc_write_tag_mask(1<<t); mfc_read_tag_status_all();
-#define MAX_CHUNK_SIZE 16384
+#define MAX_CHUNK_SIZE 4096			//it's not needed more
 #define MAX_CHUNK_SIZE_DATA_T 4096
 #define LINES_ON_MUL_CHUNK
 
@@ -20,7 +34,9 @@ task_t task __attribute__((aligned(128)));
 void compute_mean_task()
 {
 	pixel_t buffer[2][MAX_CHUNK_SIZE] __attribute__((aligned(128)));	//alocare statica ca e mai rapida si permite checking la compilare
-	data_t mean[MAX_CHUNK_SIZE] __attribute__((aligned(128)));
+	pixel_t mean[MAX_CHUNK_SIZE] __attribute__((aligned(128)));
+	data_t mean_fin[MAX_CHUNK_SIZE_DATA_T] __attribute__((aligned(128)));
+
 	uint32 *slice_sources;
 	uint32 tag[2];
 	int cur_image=0;
@@ -31,6 +47,9 @@ void compute_mean_task()
 	int start_pos;
 	int cur_buf=0;
 	int nxt_buf=1;
+	int rem;
+	vector unsigned char *mean_v;
+	vector unsigned char *buffer_v;
 
 	//Initialization
 	size=task.size;
@@ -45,7 +64,7 @@ void compute_mean_task()
 	slice_sources = (uint32*) memalign(128, CEIL_16(nr_images * sizeof(uint32)));
 	DIE(slice_sources==NULL,"Cannot alocate memory");
 
-	memset(mean,0,MAX_CHUNK_SIZE*sizeof(data_t));
+	memset(mean,0,MAX_CHUNK_SIZE*sizeof(pixel_t));
 
 	//Alocare tag
 	tag[0] = mfc_tag_reserve();
@@ -73,10 +92,16 @@ void compute_mean_task()
 		//Wait for current block of data
 		waitag(tag[cur_buf]);
 
-		//compute the sum of the pixel values
-		for (i = 0; i < size; i++) {
-			mean[i]+=buffer[cur_buf][i];
-		}
+		mean_v = (vector unsigned char*)mean;
+		buffer_v= (vector unsigned char*)buffer[cur_buf];
+		rem=(size%16);
+		//compute the sum of the pixel values	//the number of pixels will divide by 16, as stated in the limitations on the forum
+		for (i = 0; i < (size>>4); i++)
+			mean_v[i] = mean_v[i]+buffer_v[i];
+		//compute the remainder
+		for(i=size-rem;i<size;i++)
+			mean[i] +=buffer[cur_buf][i];
+
 
 		//actualize the management variables
 		cur_image++;
@@ -88,12 +113,12 @@ void compute_mean_task()
 	//Compute the mean
 	for (i = 0; i < size; i++)
 	{
-		mean[i]/=nr_images;
+		mean_fin[i]=(data_t)mean[i]/nr_images;
 	}
 	dlog(LOG_DEBUG,"\tComputation complete for mean.");
 
 	//Put the data back into main memory
-	mfc_put(mean, task.destination, CEIL_16(size * sizeof(data_t)), tag[0], 0, 0);
+	mfc_put(mean_fin, task.destination, CEIL_16(size * sizeof(data_t)), tag[0], 0, 0);
 	waitag(tag[0]);
 	dlog(LOG_DEBUG,"\tMEAN TASK data sending is complete. Data is in main memory!");
 
@@ -105,9 +130,9 @@ void compute_mean_task()
 
 void compute_SW_task()
 {
-	pixel_t buffer[MAX_CHUNK_SIZE] __attribute__((aligned(128)));	//alocare statica ca e mai rapida si permite checking la compilare
-	data_t mean_diff[MAX_CHUNK_SIZE_DATA_T] __attribute__((aligned(128)));
-	data_t result[MAX_CHUNK_SIZE_DATA_T] __attribute__((aligned(128)));
+	pixel_t buffer[MAX_CHUNK_SIZE] __attribute__((aligned(16)));	//alocare statica ca e mai rapida si permite checking la compilare
+	data_t mean_diff[MAX_CHUNK_SIZE_DATA_T] __attribute__((aligned(16)));
+	data_t result[MAX_CHUNK_SIZE_DATA_T] __attribute__((aligned(16)));
 
 	uint32 tag;
 	uint32 dest;
@@ -157,8 +182,8 @@ void compute_SW_task()
 
 void compute_addition_task()
 {
-	data_t buffer[MAX_CHUNK_SIZE] __attribute__((aligned(128)));	//alocare statica ca e mai rapida si permite checking la compilare
-	data_t result[MAX_CHUNK_SIZE] __attribute__((aligned(128)));
+	data_t *buffer;
+	data_t *result;
 	uint32 *slice_sources;
 	uint32 tag;
 	int size;
@@ -166,11 +191,15 @@ void compute_addition_task()
 	int cur_matrix,i;
 
 
-
 	//Initialization
 	size=task.size;
 	cur_matrix=0;
 	nr_matrixes=task.source1;
+
+	//Memory allocation
+	buffer=(data_t*)memalign(128,size*sizeof(data_t));
+	result=(data_t*)memalign(128,size*sizeof(data_t));
+
 
 	//dlog(LOG_WARNING,"Received a new ADD TASK with data of size %d and %d matrixes, starting at %d.",size,nr_matrixes,task.aux1);
 	assert(size*sizeof(data_t)<16384);
@@ -178,7 +207,7 @@ void compute_addition_task()
 	slice_sources = (uint32*) memalign(128, CEIL_16(nr_matrixes * sizeof(uint32)));
 	DIE(slice_sources==NULL,"Cannot alocate memory");
 
-	memset(result,0,MAX_CHUNK_SIZE*sizeof(data_t));
+	memset(result,0,size*sizeof(data_t));
 
 	//Alocare tag
 	tag = mfc_tag_reserve();
@@ -209,7 +238,41 @@ void compute_addition_task()
 
 	//Cleanup
 	free(slice_sources);
+	free(buffer);
+	free(result);
 	mfc_tag_release(tag);
+}
+
+void compute_mul_mat_vect_task()
+{
+	//data_t matrix_row[MAX_CHUNK_SIZE] __attribute__((aligned(128)));	//alocare statica ca e mai rapida si permite checking la compilare
+	//data_t vector[MAX_CHUNK_SIZE] __attribute__((aligned(128)));
+	//data_t result[MAX_CHUNK_SIZE] __attribute__((aligned(128)));
+	data_t matrix_elem;
+	data_t vector_elem;
+	data_t result=0;
+
+	uint32 matrix_addr=task.mainSource;
+	uint32 vector_addr=task.source1;
+	int size=task.size;
+	int i;
+
+	//Compute the result
+	for(i=0;i<size;i++)
+	{
+		matrix_elem=cache_rd(MY_CACHE,matrix_addr);
+		vector_elem=cache_rd(MY_CACHE,vector_addr);
+
+		result+=matrix_elem*vector_elem;
+	}
+
+	//Write back the result
+	cache_wr(MY_CACHE,task.destination,result);
+	cache_flush(MY_CACHE);
+
+
+
+
 }
 
 int main(unsigned long long speid, unsigned long long cellID, unsigned long long noThreads)
@@ -237,13 +300,17 @@ int main(unsigned long long speid, unsigned long long cellID, unsigned long long
 		//Read task
 		mfc_get(&task, dataIN, sizeof(task),tagIN,0,0);
 		waitag(tagIN);
-		dlog(LOG_INFO,"Received new task of type %u, with main source: %u and data of size: %d",task.type,task.mainSource,task.size);
+		if(task.type!=TASK_ADD && task.type!=TASK_MUL)
+		{
+			dlog(LOG_DEBUG,"Received new task of type %u, with main source: %u and data of size: %d",task.type,task.mainSource,task.size);
+		}
 
 		switch(task.type)
 		{
 		case TASK_MEAN: compute_mean_task(); break;
 		case TASK_SWS: compute_SW_task(); break;
 		case TASK_ADD: compute_addition_task(); break;
+		case TASK_MUL: compute_mul_mat_vect_task(); break;
 		default: dlog(LOG_ALERT,"Unknown type of task!!!! Skipping..."); break;
 		}
 
