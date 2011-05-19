@@ -34,8 +34,8 @@ task_t task __attribute__((aligned(128)));
 void compute_mean_task()
 {
 	pixel_t buffer[2][MAX_CHUNK_SIZE] __attribute__((aligned(128)));	//alocare statica ca e mai rapida si permite checking la compilare
-	pixel_t mean[MAX_CHUNK_SIZE] __attribute__((aligned(128)));
-	data_t mean_fin[MAX_CHUNK_SIZE_DATA_T] __attribute__((aligned(128)));
+	data_t buffer_f[MAX_CHUNK_SIZE_DATA_T] __attribute__((aligned(128)));
+	data_t mean[MAX_CHUNK_SIZE_DATA_T] __attribute__((aligned(128)));
 
 	uint32 *slice_sources;
 	uint32 tag[2];
@@ -48,8 +48,8 @@ void compute_mean_task()
 	int cur_buf=0;
 	int nxt_buf=1;
 	int rem;
-	vector unsigned char *mean_v;
-	vector unsigned char *buffer_v;
+	vector float *mean_v;
+	vector float *buffer_v;
 
 	//Initialization
 	size=task.size;
@@ -64,7 +64,7 @@ void compute_mean_task()
 	slice_sources = (uint32*) memalign(128, CEIL_16(nr_images * sizeof(uint32)));
 	DIE(slice_sources==NULL,"Cannot alocate memory");
 
-	memset(mean,0,MAX_CHUNK_SIZE*sizeof(pixel_t));
+	memset(mean,0,MAX_CHUNK_SIZE_DATA_T*sizeof(data_t));
 
 	//Alocare tag
 	tag[0] = mfc_tag_reserve();
@@ -91,17 +91,20 @@ void compute_mean_task()
 		}
 		//Wait for current block of data
 		waitag(tag[cur_buf]);
+		//Quick copy in float for vector additions and skipping the later on casts
+		for(i=0;i<size;i++)
+			buffer_f[i]=buffer[cur_buf][i];
 
-		mean_v = (vector unsigned char*)mean;
-		buffer_v= (vector unsigned char*)buffer[cur_buf];
-		rem=(size%16);
+		mean_v = (vector float*)mean;
+		buffer_v= (vector float*)buffer_f;
+		rem=(size%4);
 		//compute the sum of the pixel values	//the number of pixels will divide by 16, as stated in the limitations on the forum
-		for (i = 0; i < (size>>4); i++)
-			mean_v[i] = spu_add(mean_v[i],buffer_v[i]);
-		dlog(LOG_WARNING,"Image %d; size: %d - %d; rem %d",cur_image,size,size>>4,rem);
+		for (i = 0; i < (size>>2); i++)
+			mean_v[i] = mean_v[i] + buffer_v[i];
+		//dlog(LOG_WARNING,"Image %d; size: %d - %d; rem %d",cur_image,size,size>>4,rem);
 		//compute the remainder
 		for(i=size-rem;i<size;i++)
-			mean[i] += buffer[cur_buf][i];
+			mean[i] += buffer_f[i];
 
 
 		//actualize the management variables
@@ -114,12 +117,12 @@ void compute_mean_task()
 	//Compute the mean
 	for (i = 0; i < size; i++)
 	{
-		mean_fin[i]=(data_t)mean[i]/nr_images;
+		mean[i]/=nr_images;
 	}
 	dlog(LOG_DEBUG,"\tComputation complete for mean.");
 
 	//Put the data back into main memory
-	mfc_put(mean_fin, task.destination, CEIL_16(size * sizeof(data_t)), tag[0], 0, 0);
+	mfc_put(mean, task.destination, CEIL_16(size * sizeof(data_t)), tag[0], 0, 0);
 	waitag(tag[0]);
 	dlog(LOG_DEBUG,"\tMEAN TASK data sending is complete. Data is in main memory!");
 
