@@ -227,6 +227,7 @@ void compute_addition_task()
 	{
 		//Get the data
 		mfc_getb(buffer, slice_sources[cur_matrix]+task.aux1*sizeof(data_t), size*sizeof(data_t), tag, 0, 0);
+		waitag(tag);
 
 		for(i=0;i<size;i++)
 			result[i]+=buffer[i];

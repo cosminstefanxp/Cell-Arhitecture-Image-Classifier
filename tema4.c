@@ -493,7 +493,7 @@ void compute_scatter_matrix(image* images, int nr_images, data_t* mean, data_t* 
 	cur_task_pos=0;
 	cur_task_size=M*M;
 	cur_strip_size=M;
-	assert(M*sizeof(data_t)%16==0);	//as promised, the product W*H will be divide by 4
+	assert(M*sizeof(data_t)%16==0);	//as promised, the product W*H will divide by 4
 	//Create the strips array
 	strip_sources=(uint32*)memalign(128,CEIL_16(nr_images*sizeof(uint32)));
 	for(i=0;i<nr_images;i++)
@@ -504,12 +504,12 @@ void compute_scatter_matrix(image* images, int nr_images, data_t* mean, data_t* 
 
 	dlog(LOG_INFO,"Completed addition of SWs matrixes for images %p.",images);
 
-//	printf("\n\n");
-//	for(i=0;i<M;i++)
-//		printf("%3.2f ",SW[i]);
-//	printf("\n\n");
-//	for(i=0;i<M;i++)
-//			printf("%3.2f ",SW[M*(M-100)+i]);
+	printf("\n\n");
+	for(i=0;i<M;i++)
+		printf("%3.2f ",SW[i]);
+	printf("\n\n");
+	for(i=0;i<M;i++)
+			printf("%3.2f ",SW[M*(M-150)+i]);
 
 	//Cleanup
 	free(strip_sources);
@@ -538,13 +538,23 @@ void compute_SW(data_t* SW1, data_t* SW2, data_t* SW)
 	//Distribute the tasks to compute the additions
 	distribute_tasks(&compute_add_task_producer);
 
+	int i;
+	for(i=0;i<M;i++)
+		printf("%3.2f ",SW[9*M+i]);
+	printf("\n\n");
+	for(i=0;i<M;i++)
+			printf("%3.2f ",SW[M*(M-150)+i]);
+	printf("\n\n--------\n");
+
 	dlog(LOG_INFO,"Completed computation of SW matrix.");
+
+
 
 	//Cleanup
 	free(strip_sources);
 }
 
-/* Task 1 executer. */
+/* Task 4 executer. */
 void inverse_matrix(data_t* SW)
 {
     int info = 0;
@@ -560,6 +570,7 @@ void inverse_matrix(data_t* SW)
     posix_memalign((void **)((void*)(&a)), 128, sizeof(double)*M*M);
     DIE(a==NULL,"Allocation error");
 
+    /* Preparing the data...*/
     srand48(time(NULL));
     for( i = 0; i < M*M; i++ )
     {
@@ -569,7 +580,11 @@ void inverse_matrix(data_t* SW)
     }
 
     /*prevent matrix from being singular*/
-    rand = ((drand48() - 0.5f));
+    rand=0;
+    while(rand<(1/1e5))
+    	rand = ((drand48() - 0.5f));
+    dlog(LOG_INFO,"Rand chosen: %lf",rand);
+
     for (i=0; i<M; i++)
     	a[i + i * M] += rand * a[i + i * M];
     dlog(LOG_INFO,"Preprocessing done for n=%d.",n);
@@ -579,6 +594,7 @@ void inverse_matrix(data_t* SW)
     DIE(info!=0,"dgetrf error");
     dlog(LOG_INFO,"Round 1 done.");
 
+    exit(0);
     /*---------Query workspace-------*/
     double workspace;
     int tmp=-1;
@@ -604,10 +620,10 @@ void inverse_matrix(data_t* SW)
 
     printf("\n\n");
     for(i=0;i<M;i++)
-    	printf("%3.2f ", SW[i]);
+    	printf("%3.4f ", SW[i]);
 	printf("\n\n");
 	for (i = 0; i < M; i++)
-    	printf("%3.2f ",SW[M*(M-100)+i]);
+    	printf("%3.4f ",SW[M*(M-100)+i]);
 
     dlog(LOG_INFO,"Finished matrix inversion algorithm.");
 }
@@ -697,7 +713,7 @@ int main(int argc, char **argv)
     SW2 = create_matrix(M,M);
     //Compute the means
 	compute_scatter_matrix(images1,nrImagesTraining,mean_type1,SW1);
-	compute_scatter_matrix(images1,nrImagesTraining,mean_type1,SW2);
+	compute_scatter_matrix(images2,nrImagesTraining,mean_type2,SW2);
 
 	/*********************** TASK 3 **************************/
 	dlog(LOG_CRIT,"\n\n/****************** TASK 3 *******************\\\n");
