@@ -23,8 +23,8 @@
 // 1. scrie masca de tag
 // 2. citeste statusul - blocant pana la finalizareac comenzilor
 #define waitag(t) mfc_write_tag_mask(1<<t); mfc_read_tag_status_all();
-#define MAX_CHUNK_SIZE 4096			//it's not needed more
-#define MAX_CHUNK_SIZE_DATA_T 4096
+#define MAX_CHUNK_SIZE 4112			//it's not needed more (it includes a small offset of 16)
+#define MAX_CHUNK_SIZE_DATA_T 4112
 #define LINES_ON_MUL_CHUNK
 
 
@@ -97,10 +97,11 @@ void compute_mean_task()
 		rem=(size%16);
 		//compute the sum of the pixel values	//the number of pixels will divide by 16, as stated in the limitations on the forum
 		for (i = 0; i < (size>>4); i++)
-			mean_v[i] = mean_v[i]+buffer_v[i];
+			mean_v[i] = spu_add(mean_v[i],buffer_v[i]);
+		dlog(LOG_WARNING,"Image %d; size: %d - %d; rem %d",cur_image,size,size>>4,rem);
 		//compute the remainder
 		for(i=size-rem;i<size;i++)
-			mean[i] +=buffer[cur_buf][i];
+			mean[i] += buffer[cur_buf][i];
 
 
 		//actualize the management variables

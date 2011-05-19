@@ -457,7 +457,7 @@ void compute_mean(image* images, int nr_images, data_t* mean)
 	{
 		if(i%W==0)
 			printf("\n\n");
-		printf("%3.2f ",mean[i]);
+		printf("%.2f ",mean[i]);
 	}
 	printf("\n\n----%d---\n",M);
 }
@@ -572,7 +572,7 @@ void inverse_matrix(data_t* SW)
     rand = ((drand48() - 0.5f));
     for (i=0; i<M; i++)
     	a[i + i * M] += rand * a[i + i * M];
-    dlog(LOG_INFO,"Preprocessing done.");
+    dlog(LOG_INFO,"Preprocessing done for n=%d.",n);
 
     /*---------Call Cell LAPACK library---------*/
     dgetrf_(&n, &n, a, &n, ipiv, &info);
@@ -602,6 +602,13 @@ void inverse_matrix(data_t* SW)
     free(a);
     free(work);
 
+    printf("\n\n");
+    for(i=0;i<M;i++)
+    	printf("%3.2f ", SW[i]);
+	printf("\n\n");
+	for (i = 0; i < M; i++)
+    	printf("%3.2f ",SW[M*(M-100)+i]);
+
     dlog(LOG_INFO,"Finished matrix inversion algorithm.");
 }
 
@@ -622,7 +629,7 @@ void compute_W(data_t *mean_diff, data_t* SW, data_t* WM)
 	int i;
 	printf("\n\n");
 	for(i=0;i<M;i++)
-		printf("%3.2f ",WM[i]);
+		printf("%3.3f ",WM[i]);
 	printf("\n\n");
 }
 
