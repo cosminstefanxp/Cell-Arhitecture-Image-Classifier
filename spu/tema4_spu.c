@@ -136,12 +136,17 @@ void compute_SW_task()
 {
 	pixel_t buffer[MAX_CHUNK_SIZE] __attribute__((aligned(16)));	//alocare statica ca e mai rapida si permite checking la compilare
 	data_t mean_diff[MAX_CHUNK_SIZE_DATA_T] __attribute__((aligned(16)));
-	data_t result[MAX_CHUNK_SIZE_DATA_T] __attribute__((aligned(16)));
+	data_t result[2][MAX_CHUNK_SIZE_DATA_T] __attribute__((aligned(16)));
 
-	uint32 tag;
+	uint32 tag[2];
 	uint32 dest;
 	int i,j;
 	int M;
+	int crt=0;
+
+	vector float *result_v;
+	vector float *mean_v;
+	vector float param1;
 
 	//Initialization
 	M=task.size;
@@ -151,13 +156,16 @@ void compute_SW_task()
 	dlog(LOG_INFO,"Received a new COMPUTE SW TASK with data of size %d.",M);
 
 	//Alocare tag
-	tag = mfc_tag_reserve();
-	DIE(tag==MFC_TAG_INVALID,"Cannot alocate tag");
+	tag[0] = mfc_tag_reserve();
+	DIE(tag[0]==MFC_TAG_INVALID,"Cannot alocate tag");
+
+	tag[1] = mfc_tag_reserve();
+	DIE(tag[1]==MFC_TAG_INVALID,"Cannot alocate tag");
 
 	//Get the data
-	mfc_get(buffer, task.mainSource, CEIL_16(M * sizeof(pixel_t)), tag,	0, 0);
-	mfc_get(mean_diff, task.source1, CEIL_16(M * sizeof(data_t)), tag,	0, 0);
-	waitag(tag);
+	mfc_get(buffer, task.mainSource, CEIL_16(M * sizeof(pixel_t)), tag[0],	0, 0);
+	mfc_get(mean_diff, task.source1, CEIL_16(M * sizeof(data_t)), tag[0],	0, 0);
+	waitag(tag[0]);
 	dlog(LOG_CRAP,"\t\tData for task is in Local Storage.");
 
 	//Calculate (mean-buffer) stored in mean_diff array
@@ -167,21 +175,29 @@ void compute_SW_task()
 
 	//We process one line at a time, so we can fit in a DMA transfer
 	//the result array is actually line 'i' from the big SW matrix
+	mean_v=(vector float*)mean_diff;
 	for(i=0;i<M;i++)
 	{
+		param1=spu_splats(mean_diff[i]);
+		result_v=(vector float*)result[crt];
 		//dlog(LOG_CRAP,"Working on line %d.",i);
-		for(j=0;j<M;j++)
-			result[j]=mean_diff[i]*mean_diff[j];	//no more translation cause it's a vector
+		//Compute the results in the crt array
+		for(j=0;j<(M>>2);j++)
+			result_v[j] = param1*mean_v[j];	//no more translation cause it's a vector
 		//dlog(LOG_CRAP,"Work done. Sending %d bytes to %u.",CEIL_16(M*sizeof(data_t)),dest);
-		mfc_put(result,dest,CEIL_16(M*sizeof(data_t)),tag,0,0);
-		waitag(tag);
-		dest+=M*sizeof(data_t);
 
+		//Put the results in the main memory using the current tag
+		mfc_put(result[crt],dest,CEIL_16(M*sizeof(data_t)),tag[crt],0,0);
+		//Wait for the previous tag
+		waitag(tag[1-crt]);
+		dest+=M*sizeof(data_t);
+		crt=1-crt;
 	}
 	dlog(LOG_DEBUG,"\tCOMPUTE SW TASK task is complete and data is in main memory!");
 
 	//Cleanup
-	mfc_tag_release(tag);
+	mfc_tag_release(tag[0]);
+	mfc_tag_release(tag[1]);
 }
 
 void compute_addition_task()
@@ -223,14 +239,18 @@ void compute_addition_task()
 	dlog(LOG_CRAP,"\t\tSlice Addresses (%d bytes) in local store.",CEIL_16(nr_matrixes * sizeof(uint32)));
 
 	//Compute the addition
+	vector float *result_v;
+	vector float *buffer_v;
 	while(cur_matrix<nr_matrixes)
 	{
 		//Get the data
 		mfc_getb(buffer, slice_sources[cur_matrix]+task.aux1*sizeof(data_t), size*sizeof(data_t), tag, 0, 0);
 		waitag(tag);
 
-		for(i=0;i<size;i++)
-			result[i]+=buffer[i];
+		result_v=(vector float*)result;
+		buffer_v=(vector float*)buffer;
+		for(i=0;i<(size>>2);i++)
+			result_v[i]=result_v[i]+buffer_v[i];
 
 		cur_matrix++;
 	}
