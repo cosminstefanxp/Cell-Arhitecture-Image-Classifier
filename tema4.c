@@ -311,7 +311,7 @@ void distribute_tasks(uint32 (*get_out_data)(uint32 received_data))
 /* Produces the tasks for the task 1 (the mean of the pixels).
  *
  * For all the initial tasks we send cur_strip_size elements for processing.
- * For the previous to last task (in order to skip an extra remainind task with few elements) we send all the elements till the end.
+ * For the previous to last task (in order to skip an extra remaining task with few elements) we send all the elements till the end.
  */
 uint32 compute_mean_task_producer(uint32 cellID)
 {
@@ -400,6 +400,9 @@ uint32 compute_add_task_producer(uint32 cellID)
  */
 uint32 compute_mul_mat_vect_task_producer(uint32 cellID)
 {
+	/*******************************
+	 * Code used when using DMA Access
+	 *******************************/
 //	//If the initial distribution is finished, get the result from the task structure
 //	if(distribution_init_complete==1)
 //	{
@@ -408,6 +411,9 @@ uint32 compute_mul_mat_vect_task_producer(uint32 cellID)
 //		//I use memcpy to transfer the float in the 4 bytes of the uint32. If it's double it's also valid, as it would use the source2 field too.
 //		memcpy(&(cur_task_destination[pos]),&(tasks[cellID].source1),sizeof(data_t));
 //	}
+	/*******************************
+	 * End of Code used when using DMA Access
+	 *******************************/
 
 	//It's done so the distribution streak should finish
 	if(cur_task_pos>=cur_task_size)
