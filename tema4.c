@@ -400,14 +400,14 @@ uint32 compute_add_task_producer(uint32 cellID)
  */
 uint32 compute_mul_mat_vect_task_producer(uint32 cellID)
 {
-	//If the initial distribution is finished, get the result from the task structure
-	if(distribution_init_complete==1)
-	{
-		int pos=tasks[cellID].aux1;
-		dlog(LOG_DEBUG,"Putting result from SPU %d on %d in W matrix.",cellID,pos);
-		//I use memcpy to transfer the float in the 4 bytes of the uint32. If it's double it's also valid, as it would use the source2 field too.
-		memcpy(&(cur_task_destination[pos]),&(tasks[cellID].source1),sizeof(data_t));
-	}
+//	//If the initial distribution is finished, get the result from the task structure
+//	if(distribution_init_complete==1)
+//	{
+//		int pos=tasks[cellID].aux1;
+//		dlog(LOG_DEBUG,"Putting result from SPU %d on %d in W matrix.",cellID,pos);
+//		//I use memcpy to transfer the float in the 4 bytes of the uint32. If it's double it's also valid, as it would use the source2 field too.
+//		memcpy(&(cur_task_destination[pos]),&(tasks[cellID].source1),sizeof(data_t));
+//	}
 
 	//It's done so the distribution streak should finish
 	if(cur_task_pos>=cur_task_size)
@@ -481,14 +481,14 @@ void compute_mean(image* images, int nr_images, data_t* mean)
 	dlog(LOG_WARNING,"Mean computation finished for %d images from %p.",nr_images,images);
 
 	free(strip_sources);
-	sleep(1);
-	for(i=0;i<M;i++)
-	{
-		if(i%W==0)
-			printf("\n\n");
-		printf("%.2f ",mean[i]);
-	}
-	printf("\n\n----%d---\n",M);
+//	sleep(1);
+//	for(i=0;i<M;i++)
+//	{
+//		if(i%W==0)
+//			printf("\n\n");
+//		printf("%.2f ",mean[i]);
+//	}
+//	printf("\n\n----%d---\n",M);
 }
 
 /* Task 2 initializer. */
@@ -533,12 +533,12 @@ void compute_scatter_matrix(image* images, int nr_images, data_t* mean, data_t* 
 
 	dlog(LOG_INFO,"Completed addition of SWs matrixes for images %p.",images);
 
-	printf("\n\n");
-	for(i=0;i<M;i++)
-		printf("%3.2f ",SW[i]);
-	printf("\n\n");
-	for(i=0;i<M;i++)
-			printf("%3.2f ",SW[M*(M-150)+i]);
+//	printf("\n\n");
+//	for(i=0;i<M;i++)
+//		printf("%3.2f ",SW[i]);
+//	printf("\n\n");
+//	for(i=0;i<M;i++)
+//			printf("%3.2f ",SW[M*(M-150)+i]);
 
 	//Cleanup
 	free(strip_sources);
@@ -648,10 +648,10 @@ void inverse_matrix(data_t* SW)
     free(a);
     free(work);
 
-    printf("\n\n");
-    for(i=0;i<M;i++)
-    	printf("%3.4f ", SW[i]);
-	printf("\n\n");
+//    printf("\n\n");
+//    for(i=0;i<M;i++)
+//    	printf("%3.4f ", SW[i]);
+//	printf("\n\n");
 
 
     dlog(LOG_INFO,"Finished matrix inversion algorithm.");
@@ -671,11 +671,11 @@ void compute_W(data_t *mean_diff, data_t* SW, data_t* WM)
 	//Start the distribution
 	distribute_tasks(&compute_mul_mat_vect_task_producer);
 
-	int i;
-	printf("\n\n");
-	for(i=0;i<M;i++)
-		printf("%3.3f ",WM[i]);
-	printf("\n\n");
+//	int i;
+//	printf("\n\n");
+//	for(i=0;i<M;i++)
+//		printf("%3.3f ",WM[i]);
+//	printf("\n\n");
 }
 
 /* Task 6 initializer.
@@ -855,6 +855,9 @@ int main(int argc, char **argv)
 	}
 	free(images1);
 	free(images2);
+	free(projections1);
+	free(projections2);
+	free(projections_clasif);
 	free(test_images);
 	dlog(LOG_DEBUG,"Clean-up complete.");
 

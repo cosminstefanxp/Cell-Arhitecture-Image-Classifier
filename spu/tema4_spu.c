@@ -8,13 +8,13 @@
 
 
 #define CACHE_NAME MY_CACHE /* numele cache-ului */
-#define CACHED_TYPE float /* tipul elementului de baza al cache-ului */
+#define CACHED_TYPE data_t /* tipul elementului de baza al cache-ului */
 
 /* atribute optionale */
 #define CACHE_TYPE CACHE_TYPE_RW 	/* acces de scriere si citire */
-#define CACHELINE_LOG2SIZE 10 		/* 2^10 = lungimea unei linii de cache de 1024 bytes */
+#define CACHELINE_LOG2SIZE 8		/* 2^10 = lungimea unei linii de cache de 1024 bytes */
 #define CACHE_LOG2NWAY 2 /* 2^2 = 4-way cache */
-#define CACHE_LOG2NSETS 4 /* 2^3 = 8 seturi */
+#define CACHE_LOG2NSETS 3 /* 2^3 = 8 seturi */
 
 #include <cache-api.h>
 
@@ -76,7 +76,7 @@ void compute_mean_task()
 	//Get addresses of slices
 	mfc_getb(slice_sources, task.mainSource, CEIL_16(nr_images * sizeof(uint32)), tag[0],	0, 0);
 	waitag(tag[0]);
-	dlog(LOG_CRAP,"\t\tSlice Addresses (%d bytes) in local store.",CEIL_16(nr_images * sizeof(uint32)));
+	dlog(LOG_CRAP,"\t\tSlice Addresses (%d bytes) in local store.",(int)CEIL_16(nr_images * sizeof(uint32)));
 
 	//Request first block of data
 	mfc_getb(buffer[0], slice_sources[cur_image]+start_pos*sizeof(pixel_t), fetchable_size*sizeof(pixel_t), tag[0], 0, 0);
@@ -236,7 +236,7 @@ void compute_addition_task()
 	//Get addresses of slices
 	mfc_getb(slice_sources, task.mainSource, CEIL_16(nr_matrixes * sizeof(uint32)), tag,	0, 0);
 	waitag(tag);
-	dlog(LOG_CRAP,"\t\tSlice Addresses (%d bytes) in local store.",CEIL_16(nr_matrixes * sizeof(uint32)));
+	dlog(LOG_CRAP,"\t\tSlice Addresses (%d bytes) in local store.",(int)CEIL_16(nr_matrixes * sizeof(uint32)));
 
 	//Compute the addition
 	vector float *result_v;
@@ -270,53 +270,95 @@ void compute_addition_task()
 
 void compute_mul_mat_vect_task(uint32 task_addr)
 {
-	data_t matrix_row[MAX_CHUNK_SIZE] __attribute__((aligned(128)));	//alocare statica ca e mai rapida si permite checking la compilare
-	data_t vector[MAX_CHUNK_SIZE] __attribute__((aligned(128)));
-	data_t result=0;
-	data_t results[4];
-	uint32 tag;
+	/*******************************************************************
+	 * DMA Access version of the implementation. Decomment this and the associated lines in the
+	 * PPU program (tema4.c), to change to DMA access.
+	 *
+	 *******************************************************************/
 
-	//Initialization
+//	  data_t matrix_row[MAX_CHUNK_SIZE] __attribute__((aligned(128)));  //alocare statica ca e mai rapida si permite checking la compilare
+//	  data_t vector[MAX_CHUNK_SIZE] __attribute__((aligned(128)));
+//	  data_t result=0;
+//	  data_t results[4];
+//	  uint32 tag;
+//
+//	  //Initialization
+//	  uint32 matrix_addr=task.mainSource;
+//	  uint32 vector_addr=task.source1;
+//	  dlog(LOG_DEBUG,"NEW COMPUTE MUL_MAT_VECT Task with matrix address: %u and vector address %u",task.mainSource,task.source1);
+//	  int size=task.size;
+//	  int i;
+//	  memset(results,0,4*sizeof(data_t));
+//
+//	  vector float *matrix_v;
+//	  vector float *vector_v;
+//	  vector float *result_v;
+//
+//	  //Alocare tag
+//	  tag = mfc_tag_reserve();
+//	  DIE(tag==MFC_TAG_INVALID,"Cannot alocate tag");
+//
+//	  //Get the data
+//	  mfc_getb(vector, vector_addr, size*sizeof(data_t), tag, 0, 0);
+//	  mfc_getb(matrix_row, matrix_addr, size*sizeof(data_t), tag, 0, 0);
+//	  waitag(tag);
+//
+//	  //Compute the result
+//	  matrix_v=(vector float*)matrix_row;
+//	  vector_v=(vector float*)vector;
+//	  result_v=(vector float*)results;
+//
+//	  for(i=0;i<(size>>2);i++)
+//	  {
+//	    //dlog(LOG_INFO,"For i %d we have %f and %f",i,matrix_row[i],vector[i]);
+//	    result_v[0]=matrix_v[i]*vector_v[i]+result_v[0];
+//	  }
+//	  //Compute the final result after vectorization
+//	  for(i=0;i<4;i++)
+//	    result+=results[i];
+//
+//	  //Write back the result
+//	  memcpy(&task.source1,&result,sizeof(data_t));
+//	  mfc_put(&task, task_addr, sizeof(task_t), tag, 0, 0);
+//	  waitag(tag);
+//
+//	  mfc_tag_release(tag);
+	/***********************************************************
+	 * End of DMA Access version
+	 **********************************************************/
+
+	/***********************************************************
+	 * Cache implementation of the function
+	 **********************************************************/
+	data_t matrix_elem;
+	data_t vector_elem;
+	data_t result=0;
+
 	uint32 matrix_addr=task.mainSource;
 	uint32 vector_addr=task.source1;
 	dlog(LOG_DEBUG,"NEW COMPUTE MUL_MAT_VECT Task with matrix address: %u and vector address %u",task.mainSource,task.source1);
 	int size=task.size;
 	int i;
-	memset(results,0,4*sizeof(data_t));
-
-	vector float *matrix_v;
-	vector float *vector_v;
-	vector float *result_v;
-
-	//Alocare tag
-	tag = mfc_tag_reserve();
-	DIE(tag==MFC_TAG_INVALID,"Cannot alocate tag");
-
-	//Get the data
-	mfc_getb(vector, vector_addr, size*sizeof(data_t), tag, 0, 0);
-	mfc_getb(matrix_row, matrix_addr, size*sizeof(data_t), tag, 0, 0);
-	waitag(tag);
 
 	//Compute the result
-	matrix_v=(vector float*)matrix_row;
-	vector_v=(vector float*)vector;
-	result_v=(vector float*)results;
-
-	for(i=0;i<(size>>2);i++)
+	for(i=0;i<size;i++)
 	{
-		//dlog(LOG_INFO,"For i %d we have %f and %f",i,matrix_row[i],vector[i]);
-		result_v[0]=matrix_v[i]*vector_v[i]+result_v[0];
+		matrix_elem=cache_rd(MY_CACHE,matrix_addr);
+		vector_elem=cache_rd(MY_CACHE,vector_addr);
+
+		//dlog(LOG_CRIT,"Am obtinut valorile: %f %f",matrix_elem,vector_elem);
+		result+=matrix_elem*vector_elem;
+
+		matrix_addr+=sizeof(data_t);
+		vector_addr+=sizeof(data_t);
 	}
-	//Compute the final result after vectorization
-	for(i=0;i<4;i++)
-		result+=results[i];
 
 	//Write back the result
-	memcpy(&task.source1,&result,sizeof(data_t));
-	mfc_put(&task, task_addr, sizeof(task_t), tag, 0, 0);
-	waitag(tag);
-
-	mfc_tag_release(tag);
+	cache_wr(MY_CACHE,task.destination,result);
+	cache_flush(MY_CACHE);
+	/***********************************************************************
+	 * End of CACHE version
+	 **********************************************************************/
 }
 
 void compute_projection_task(uint32 task_addr)
