@@ -400,14 +400,14 @@ uint32 compute_add_task_producer(uint32 cellID)
  */
 uint32 compute_mul_mat_vect_task_producer(uint32 cellID)
 {
-//	//If the initial distribution is finished, get the result from the task structure
-//	if(distribution_init_complete)
-//	{
-//		int pos=tasks[cellID].aux1;
-//		dlog(LOG_INFO,"Putting result from SPU %d on %d in W matrix.",cellID,pos);
-//		//I use memcpy to transfer the float in the 4 bytes of the uint32. If it's double it's also valid, as it would use the source2 field too.
-//		memcpy(&(cur_task_destination[pos]),&(tasks[cellID].source1),sizeof(data_t));
-//	}
+	//If the initial distribution is finished, get the result from the task structure
+	if(distribution_init_complete==1)
+	{
+		int pos=tasks[cellID].aux1;
+		dlog(LOG_DEBUG,"Putting result from SPU %d on %d in W matrix.",cellID,pos);
+		//I use memcpy to transfer the float in the 4 bytes of the uint32. If it's double it's also valid, as it would use the source2 field too.
+		memcpy(&(cur_task_destination[pos]),&(tasks[cellID].source1),sizeof(data_t));
+	}
 
 	//It's done so the distribution streak should finish
 	if(cur_task_pos>=cur_task_size)
@@ -423,6 +423,35 @@ uint32 compute_mul_mat_vect_task_producer(uint32 cellID)
 
 	dlog(LOG_DEBUG,"\tSending add MULTIPLICATION slice of size %d beginning at %d to cell %d",\
 				tasks[cellID].size,tasks[cellID].aux1,cellID);
+	cur_task_pos+=1;
+
+	return (uint32) &tasks[cellID];
+}
+
+uint32 compute_projection_task_producer(uint32 cellID)
+{
+	//If the initial distribution is finished, get the result from the task structure
+	if(distribution_init_complete==1)
+	{
+		int pos=tasks[cellID].aux1;
+		//I use memcpy to transfer the float in the 4 bytes of the uint32. If it's double it's also valid, as it would use the source2 field too.
+		memcpy(&(cur_task_destination[pos]),&(tasks[cellID].source1),sizeof(data_t));
+		dlog(LOG_INFO,"Putting result %f from SPU %d for image %d in projection matrix.",cur_task_destination[pos],cellID,pos);
+	}
+
+	//It's done so the distribution streak should finish
+	if(cur_task_pos>=cur_image_num)
+		return DISTRIBUTE_TASK_EXIT;
+
+	//Build structure
+	tasks[cellID].type=TASK_PROJ;
+	tasks[cellID].mainSource=(uint32)((cur_images[cur_task_pos]->buf));	//we give data in the image
+	tasks[cellID].source1=(uint32)cur_vector;								//the vector
+	tasks[cellID].aux1=(uint32)cur_task_pos;		//the current position in the matrix; used when returning the value back to PPU
+	tasks[cellID].size=(uint32)cur_task_size;		//the size of the strip (i.e. a line of the matrix <=> M)
+
+	dlog(LOG_DEBUG,"\tSending get PROJECTION slice of size %u from pos %u to cell %d with main source %u",\
+				tasks[cellID].size,tasks[cellID].aux1,cellID,tasks[cellID].mainSource);
 	cur_task_pos+=1;
 
 	return (uint32) &tasks[cellID];
@@ -631,7 +660,7 @@ void inverse_matrix(data_t* SW)
 /* Task 5 initializer. */
 void compute_W(data_t *mean_diff, data_t* SW, data_t* WM)
 {
-	//Prepare the tasks for addition of matrixes
+	//Prepare the tasks for computation of W
 	cur_task_destination=WM;
 	cur_task_pos=0;			//the current line processing
 	cur_matrix=SW;			//the matrix
@@ -647,6 +676,29 @@ void compute_W(data_t *mean_diff, data_t* SW, data_t* WM)
 	for(i=0;i<M;i++)
 		printf("%3.3f ",WM[i]);
 	printf("\n\n");
+}
+
+/* Task 6 initializer.
+ * Returns the array of projections.
+ */
+data_t* get_projection(image *images, int images_nr, data_t *WM)
+{
+	//Init the memory
+	data_t *projections;
+	projections=calloc(images_nr,sizeof(data_t));
+
+	//Prepare the tasks for computation of W
+	cur_task_destination=projections;
+	cur_task_pos=0;			//the current line processing
+	cur_images=images;		//the images
+	cur_image_num=images_nr;//the number of images
+	cur_task_size=M;		//M elements in the images/vector
+	cur_vector=WM;
+
+	//Start the distribution
+	distribute_tasks(&compute_projection_task_producer);
+
+	return projections;
 }
 
 int main(int argc, char **argv)
@@ -737,6 +789,54 @@ int main(int argc, char **argv)
 	data_t *WM=create_matrix(M,1);	//W Matrix
 	//Compute the W array
 	compute_W(mean_diff, SW, WM);
+
+	/*********************** TASK 6 **************************/
+	dlog(LOG_CRIT,"\n\n/****************** TASK 6 *******************\\\n");
+	data_t *projections1,*projections2;
+	projections1=get_projection(images1,nrImagesTraining,WM);
+	projections2=get_projection(images2,nrImagesTraining,WM);
+
+	/*********************** TASK 7 **************************/
+	dlog(LOG_CRIT,"\n\n/****************** TASK 7 *******************\\\n");
+	data_t mean_proj1=0,mean_proj2=0;
+	data_t sd_proj1=0,sd_proj2=0;
+	for(i=0;i<nrImagesTraining;i++)
+	{
+		mean_proj1+=projections1[i];
+		mean_proj2+=projections2[i];
+	}
+	mean_proj1/=nrImagesTraining;
+	mean_proj2/=nrImagesTraining;
+	for(i=0;i<nrImagesTraining;i++)
+	{
+		 sd_proj1+=(projections1[i]-mean_proj1)*(projections1[i]-mean_proj1);
+		 sd_proj2+=(projections2[i]-mean_proj2)*(projections2[i]-mean_proj2);
+	}
+	sd_proj1/=nrImagesTraining;
+	sd_proj2/=nrImagesTraining;
+	dlog(LOG_WARNING,"Image type 1 - mean: %f - sd: %f",mean_proj1,sd_proj1);
+	dlog(LOG_WARNING,"Image type 2 - mean: %f - sd: %f",mean_proj2,sd_proj2);
+
+	/*********************** CLASIFICATION **************************/
+	dlog(LOG_CRIT,"\n\n/****************** CLASIFICATION *******************\\\n");
+	data_t *projections_clasif;
+	projections_clasif=get_projection(test_images,nrImagesClasify,WM);
+	for(i=0;i<nrImagesClasify;i++)
+	{
+        if (abs(projections_clasif[i] - mean_proj1) < abs(projections_clasif[i] - mean_proj2))
+        {
+            printf("Image %s - Classified as %s\n",test_images[i]->name,dir1);
+            continue;
+        }
+
+        if (abs(projections_clasif[i] - mean_proj1) > abs(projections_clasif[i] - mean_proj2))
+        {
+            printf("Image %s - Classified as %s\n",test_images[i]->name,dir2);
+            continue;
+        }
+
+        printf("Image %s - Not classified\n", test_images[i]->name);
+	}
 
 	/********************** CLEANUP **************************/
 	dlog(LOG_CRIT,"\n\n/***************** CLEANUP ******************\\\n");

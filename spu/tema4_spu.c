@@ -248,38 +248,85 @@ void compute_addition_task()
 	mfc_tag_release(tag);
 }
 
-void compute_mul_mat_vect_task()
+void compute_mul_mat_vect_task(uint32 task_addr)
 {
-	//data_t matrix_row[MAX_CHUNK_SIZE] __attribute__((aligned(128)));	//alocare statica ca e mai rapida si permite checking la compilare
-	//data_t vector[MAX_CHUNK_SIZE] __attribute__((aligned(128)));
-	//data_t result[MAX_CHUNK_SIZE] __attribute__((aligned(128)));
-	data_t matrix_elem;
-	data_t vector_elem;
+	data_t matrix_row[MAX_CHUNK_SIZE] __attribute__((aligned(128)));	//alocare statica ca e mai rapida si permite checking la compilare
+	data_t vector[MAX_CHUNK_SIZE] __attribute__((aligned(128)));
 	data_t result=0;
+	uint32 tag;
 
+	//Initialization
 	uint32 matrix_addr=task.mainSource;
 	uint32 vector_addr=task.source1;
 	dlog(LOG_DEBUG,"NEW COMPUTE MUL_MAT_VECT Task with matrix address: %u and vector address %u",task.mainSource,task.source1);
 	int size=task.size;
 	int i;
 
+
+	//Alocare tag
+	tag = mfc_tag_reserve();
+	DIE(tag==MFC_TAG_INVALID,"Cannot alocate tag");
+
+	//Get the data
+	mfc_getb(vector, vector_addr, size*sizeof(data_t), tag, 0, 0);
+	mfc_getb(matrix_row, matrix_addr, size*sizeof(data_t), tag, 0, 0);
+	waitag(tag);
+
 	//Compute the result
 	for(i=0;i<size;i++)
 	{
-		matrix_elem=cache_rd(MY_CACHE,matrix_addr);
-		vector_elem=cache_rd(MY_CACHE,vector_addr);
-
-		//dlog(LOG_CRIT,"Am obtinut valorile: %f %f",matrix_elem,vector_elem);
-		result+=matrix_elem*vector_elem;
-
-		matrix_addr+=sizeof(data_t);
-		vector_addr+=sizeof(data_t);
+		//dlog(LOG_INFO,"For i %d we have %f and %f",i,matrix_row[i],vector[i]);
+		result+=matrix_row[i]*vector[i];
 	}
 
 	//Write back the result
-	cache_wr(MY_CACHE,task.destination,result);
-	cache_flush(MY_CACHE);
+	memcpy(&task.source1,&result,sizeof(data_t));
+	mfc_put(&task, task_addr, sizeof(task_t), tag, 0, 0);
+	waitag(tag);
 
+	//dlog(LOG_INFO,"Result for line %d is %f",task.aux1,task.source1);
+
+	mfc_tag_release(tag);
+}
+
+void compute_projection_task(uint32 task_addr)
+{
+	pixel_t buffer[MAX_CHUNK_SIZE] __attribute__((aligned(128)));	//alocare statica ca e mai rapida si permite checking la compilare
+	data_t vector[MAX_CHUNK_SIZE] __attribute__((aligned(128)));
+	data_t result=0;
+	uint32 tag;
+
+	//Initialization
+	uint32 image_addr=task.mainSource;
+	uint32 vector_addr=task.source1;
+	dlog(LOG_DEBUG,"NEW PROJECTION Task with image address: %u and vector address %u",task.mainSource,task.source1);
+	int size=task.size;
+	int i;
+
+
+	//Alocare tag
+	tag = mfc_tag_reserve();
+	DIE(tag==MFC_TAG_INVALID,"Cannot alocate tag");
+
+	//Get the data
+	mfc_getb(vector, vector_addr, size*sizeof(data_t), tag, 0, 0);
+	mfc_getb(buffer, image_addr, CEIL_16(size*sizeof(pixel_t)), tag, 0, 0);	//we get more elements but we process only what is needed
+	waitag(tag);
+
+	//Compute the result
+	for(i=0;i<size;i++)
+	{
+		//dlog(LOG_INFO,"For i %d we have %f and %f",i,matrix_row[i],vector[i]);
+		result+=buffer[i]*vector[i];
+	}
+
+	//Write back the result
+	memcpy(&task.source1,&result,sizeof(data_t));
+	mfc_put(&task, task_addr, sizeof(task_t), tag, 0, 0);
+	waitag(tag);
+
+	dlog(LOG_DEBUG,"Result for image %d is %f",task.aux1,result);
+	mfc_tag_release(tag);
 }
 
 int main(unsigned long long speid, unsigned long long cellID, unsigned long long noThreads)
@@ -317,7 +364,8 @@ int main(unsigned long long speid, unsigned long long cellID, unsigned long long
 		case TASK_MEAN: compute_mean_task(); break;
 		case TASK_SWS: compute_SW_task(); break;
 		case TASK_ADD: compute_addition_task(); break;
-		case TASK_MUL: compute_mul_mat_vect_task(); break;
+		case TASK_MUL: compute_mul_mat_vect_task(dataIN); break;
+		case TASK_PROJ: compute_projection_task(dataIN); break;
 		default: dlog(LOG_ALERT,"Unknown type of task!!!! Skipping..."); break;
 		}
 

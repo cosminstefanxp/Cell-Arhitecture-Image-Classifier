@@ -31,6 +31,7 @@ typedef float				data_t;
 #define TASK_SWS			2
 #define TASK_ADD			3
 #define TASK_MUL			4
+#define TASK_PROJ			5
 
 
 #define TASK_DATA_EXIT			0
