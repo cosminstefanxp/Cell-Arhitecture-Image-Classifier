@@ -273,6 +273,7 @@ void compute_mul_mat_vect_task(uint32 task_addr)
 	data_t matrix_row[MAX_CHUNK_SIZE] __attribute__((aligned(128)));	//alocare statica ca e mai rapida si permite checking la compilare
 	data_t vector[MAX_CHUNK_SIZE] __attribute__((aligned(128)));
 	data_t result=0;
+	data_t results[4];
 	uint32 tag;
 
 	//Initialization
@@ -281,7 +282,11 @@ void compute_mul_mat_vect_task(uint32 task_addr)
 	dlog(LOG_DEBUG,"NEW COMPUTE MUL_MAT_VECT Task with matrix address: %u and vector address %u",task.mainSource,task.source1);
 	int size=task.size;
 	int i;
+	memset(results,0,4*sizeof(data_t));
 
+	vector float *matrix_v;
+	vector float *vector_v;
+	vector float *result_v;
 
 	//Alocare tag
 	tag = mfc_tag_reserve();
@@ -293,18 +298,23 @@ void compute_mul_mat_vect_task(uint32 task_addr)
 	waitag(tag);
 
 	//Compute the result
-	for(i=0;i<size;i++)
+	matrix_v=(vector float*)matrix_row;
+	vector_v=(vector float*)vector;
+	result_v=(vector float*)results;
+
+	for(i=0;i<(size>>2);i++)
 	{
 		//dlog(LOG_INFO,"For i %d we have %f and %f",i,matrix_row[i],vector[i]);
-		result+=matrix_row[i]*vector[i];
+		result_v[0]=matrix_v[i]*vector_v[i]+result_v[0];
 	}
+	//Compute the final result after vectorization
+	for(i=0;i<4;i++)
+		result+=results[i];
 
 	//Write back the result
 	memcpy(&task.source1,&result,sizeof(data_t));
 	mfc_put(&task, task_addr, sizeof(task_t), tag, 0, 0);
 	waitag(tag);
-
-	//dlog(LOG_INFO,"Result for line %d is %f",task.aux1,task.source1);
 
 	mfc_tag_release(tag);
 }
