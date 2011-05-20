@@ -14,7 +14,7 @@
 #define CACHE_TYPE CACHE_TYPE_RW 	/* acces de scriere si citire */
 #define CACHELINE_LOG2SIZE 10 		/* 2^10 = lungimea unei linii de cache de 1024 bytes */
 #define CACHE_LOG2NWAY 2 /* 2^2 = 4-way cache */
-#define CACHE_LOG2NSETS 3 /* 2^3 = 8 seturi */
+#define CACHE_LOG2NSETS 4 /* 2^3 = 8 seturi */
 
 #include <cache-api.h>
 
@@ -259,6 +259,7 @@ void compute_mul_mat_vect_task()
 
 	uint32 matrix_addr=task.mainSource;
 	uint32 vector_addr=task.source1;
+	dlog(LOG_DEBUG,"NEW COMPUTE MUL_MAT_VECT Task with matrix address: %u and vector address %u",task.mainSource,task.source1);
 	int size=task.size;
 	int i;
 
@@ -268,15 +269,16 @@ void compute_mul_mat_vect_task()
 		matrix_elem=cache_rd(MY_CACHE,matrix_addr);
 		vector_elem=cache_rd(MY_CACHE,vector_addr);
 
+		//dlog(LOG_CRIT,"Am obtinut valorile: %f %f",matrix_elem,vector_elem);
 		result+=matrix_elem*vector_elem;
+
+		matrix_addr+=sizeof(data_t);
+		vector_addr+=sizeof(data_t);
 	}
 
 	//Write back the result
 	cache_wr(MY_CACHE,task.destination,result);
 	cache_flush(MY_CACHE);
-
-
-
 
 }
 

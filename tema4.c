@@ -538,14 +538,16 @@ void compute_SW(data_t* SW1, data_t* SW2, data_t* SW)
 	//Distribute the tasks to compute the additions
 	distribute_tasks(&compute_add_task_producer);
 
-	int i;
-	for(i=0;i<M;i++)
-		printf("%3.2f ",SW[9*M+i]);
-	printf("\n\n");
-	for(i=0;i<M;i++)
-			printf("%3.2f ",SW[M*(M-150)+i]);
-	printf("\n\n--------\n");
-
+//	FILE* fout=fopen("out_w","w");
+//	DIE(fout==NULL,"Creare fisier");
+//
+//	int i,j;
+//	for(i=0;i<M;i++)
+//	{
+//		for(j=0;j<M;j++)
+//			fprintf(fout,"%3.3f ",SW[M*i+j]);
+//		fprintf(fout,"\n");
+//	}
 	dlog(LOG_INFO,"Completed computation of SW matrix.");
 
 
@@ -594,7 +596,6 @@ void inverse_matrix(data_t* SW)
     DIE(info!=0,"dgetrf error");
     dlog(LOG_INFO,"Round 1 done.");
 
-    exit(0);
     /*---------Query workspace-------*/
     double workspace;
     int tmp=-1;
@@ -622,8 +623,7 @@ void inverse_matrix(data_t* SW)
     for(i=0;i<M;i++)
     	printf("%3.4f ", SW[i]);
 	printf("\n\n");
-	for (i = 0; i < M; i++)
-    	printf("%3.4f ",SW[M*(M-100)+i]);
+
 
     dlog(LOG_INFO,"Finished matrix inversion algorithm.");
 }
