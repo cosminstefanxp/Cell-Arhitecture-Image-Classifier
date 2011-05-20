@@ -222,7 +222,7 @@ void compute_addition_task()
 
 
 	//dlog(LOG_WARNING,"Received a new ADD TASK with data of size %d and %d matrixes, starting at %d.",size,nr_matrixes,task.aux1);
-	assert(size*sizeof(data_t)<16384);
+	assert(size*sizeof(data_t)<=16384);
 
 	slice_sources = (uint32*) memalign(128, CEIL_16(nr_matrixes * sizeof(uint32)));
 	DIE(slice_sources==NULL,"Cannot alocate memory");

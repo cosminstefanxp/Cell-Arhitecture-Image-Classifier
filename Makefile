@@ -30,7 +30,7 @@ PROGRAM_ppu	:= tema4
 ################
 
 IMPORTS		:= -llapack -lblas -lm spu/lib_tema4_spu.a -lspe2 -lpthread
-CFLAGS 		:= -DDEBUG_ -DLOG_LEVEL=LOG_INFO
+CFLAGS 		:= #-DDEBUG_ -DLOG_LEVEL=LOG_INFO
 
 # imports the embedded simple_spu library
 
